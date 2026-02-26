@@ -96,6 +96,44 @@ Execute `server.py`, providing the access token via the `--fb-token` argument.
 python server.py --fb-token YOUR_META_ACCESS_TOKEN
 ```
 
+### Remote HTTP Deployment (Dockploy, Cursor, Antigravity)
+
+For remote deployment (Docker/Dockploy), the server supports **Streamable HTTP** transport so Cursor and Antigravity can connect via URL.
+
+**Environment variables for Docker:**
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `TRANSPORT` | Yes | Set to `http` to enable HTTP mode |
+| `FB_TOKEN` | Yes | Meta/Facebook access token |
+| `PORT` | No | Port to listen on (default: 8000) |
+| `HOST` | No | Host to bind (default: 0.0.0.0) |
+
+**Example Dockploy env:**
+```
+TRANSPORT=http
+FB_TOKEN=your_meta_access_token
+PORT=8000
+```
+
+The MCP endpoint will be available at `https://your-domain.com/mcp`
+
+**Cursor Configuration** (Settings → Tools & MCP → Add new MCP server):
+- **Type:** `streamableHttp`
+- **URL:** `https://metamcp.agencybts.com/mcp` (use your domain)
+- **Headers:** (optional) Add `Authorization` if you add auth later
+
+**Antigravity Configuration** (Settings → MCP):
+Add to your MCP config:
+```json
+{
+  "mcpServers": {
+    "meta-ads": {
+      "url": "https://metamcp.agencybts.com/mcp"
+    }
+  }
+}
+```
+
 ### Available MCP Tools
 
 This MCP server provides tools for interacting with META Ads objects and data:

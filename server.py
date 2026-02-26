@@ -1,9 +1,10 @@
 # server.py
 from mcp.server.fastmcp import FastMCP
+import copy
 import requests
 from typing import Dict, List, Optional, Any
 import json
-import requests
+import os
 import sys
 
     
@@ -28,27 +29,35 @@ FB_ACCESS_TOKEN = None
 
 def _get_fb_access_token() -> str:
     """
-    Get Facebook access token from command line arguments.
+    Get Facebook access token from environment or command line arguments.
+    Priority: FB_TOKEN env > FB_ACCESS_TOKEN env > --fb-token argument.
     Caches the token in memory after first read.
 
     Returns:
         str: The Facebook access token.
 
     Raises:
-        Exception: If no token is provided in command line arguments.
+        Exception: If no token is provided.
     """
     global FB_ACCESS_TOKEN
     if FB_ACCESS_TOKEN is None:
-        # Look for --fb-token argument
-        if "--fb-token" in sys.argv:
+        # Check environment variables (for Docker/Dockploy)
+        token = os.environ.get("FB_TOKEN") or os.environ.get("FB_ACCESS_TOKEN")
+        if token:
+            FB_ACCESS_TOKEN = token
+            print("Using Facebook token from environment variable")
+        # Look for --fb-token argument (for local stdio)
+        elif "--fb-token" in sys.argv:
             token_index = sys.argv.index("--fb-token") + 1
             if token_index < len(sys.argv):
                 FB_ACCESS_TOKEN = sys.argv[token_index]
-                print(f"Using Facebook token from command line arguments")
+                print("Using Facebook token from command line arguments")
             else:
                 raise Exception("--fb-token argument provided but no token value followed it")
         else:
-            raise Exception("Facebook token must be provided via '--fb-token' command line argument")
+            raise Exception(
+                "Facebook token must be provided via FB_TOKEN env var or '--fb-token' argument"
+            )
 
     return FB_ACCESS_TOKEN
 
@@ -64,6 +73,34 @@ def _make_graph_api_call(url: str, params: Dict[str, Any]) -> Dict:
         # Depending on desired behavior, you might want to raise a custom exception
         # or return a specific error structure. Re-raising keeps the current behavior.
         raise
+
+
+def _make_graph_api_post(url: str, data: Dict[str, Any]) -> Dict:
+    """Makes a POST request to the Facebook Graph API (for create/update operations)."""
+    try:
+        form_data = {}
+        for key, value in data.items():
+            if isinstance(value, (dict, list)):
+                form_data[key] = json.dumps(value)
+            else:
+                form_data[key] = str(value) if value is not None else value
+        response = requests.post(url, data=form_data)
+        parsed = response.json() if response.text else {}
+        if not response.ok:
+            err_msg = parsed.get('error', {}).get('message', response.text or str(response.status_code))
+            print(f"Graph API POST {url}: {response.status_code} - {err_msg}")
+            return parsed  # Return body so caller can check 'error' key
+        return parsed
+    except requests.exceptions.RequestException as e:
+        err_detail = getattr(getattr(e, 'response', None), 'text', '') or str(e)
+        print(f"Error making Graph API POST to {url}: {e}. Response: {err_detail}")
+        raise
+
+
+def _make_graph_api_patch(url: str, data: Dict[str, Any]) -> Dict:
+    """Makes a POST request with _method=PATCH for Facebook Graph API updates."""
+    data_with_method = {**data, '_method': 'PATCH'}
+    return _make_graph_api_post(url, data_with_method)
 
 
 def _prepare_params(base_params: Dict[str, Any], **kwargs) -> Dict[str, Any]:
@@ -914,6 +951,315 @@ def get_ad_creative_by_id(
         params['thumbnail_height'] = thumbnail_height
     
     return _make_graph_api_call(url, params)
+
+
+@mcp.tool()
+def update_ad_creative_assets(
+    creative_id: str,
+    ad_id: str,
+    bodies: List[str],
+    titles: List[str],
+) -> Dict:
+    """Updates the primary text (bodies) and titles of an ad creative with Dynamic Creative / asset_feed_spec.
+    
+    Creates a new creative with the updated bodies and titles, then updates the ad to use it.
+    Use this to A/B test different ad copy variants (e.g. 5 text options + 5 title options).
+
+    Args:
+        creative_id (str): The ID of the ad creative to update (source for structure).
+        ad_id (str): The ID of the ad that uses this creative (will be updated to use new creative).
+        bodies (List[str]): List of primary text strings (recommended 5 for Dynamic Creative).
+        titles (List[str]): List of title/headline strings (recommended 5 for Dynamic Creative).
+
+    Returns:
+        Dict with 'success', 'new_creative_id', 'message'.
+    """
+    access_token = _get_fb_access_token()
+    
+    # 1. Get current creative with full asset_feed_spec
+    creative_resp = _make_graph_api_call(
+        f"{FB_GRAPH_URL}/{creative_id}",
+        {'access_token': access_token, 'fields': 'asset_feed_spec,object_story_spec,account_id'}
+    )
+    if 'error' in creative_resp:
+        return creative_resp
+    
+    asset_feed_spec = creative_resp.get('asset_feed_spec')
+    account_id = creative_resp.get('account_id', '').replace('act_', '')
+    act_id = f"act_{account_id}" if account_id else None
+    
+    if not asset_feed_spec:
+        return {'success': False, 'error': 'Creative does not use asset_feed_spec (Dynamic Creative)'}
+    
+    if not act_id:
+        # Get account from ad
+        ad_resp = _make_graph_api_call(
+            f"{FB_GRAPH_URL}/{ad_id}",
+            {'access_token': access_token, 'fields': 'account_id'}
+        )
+        act_id = ad_resp.get('account_id', '')
+    
+    # 2. Build new bodies and titles preserving adlabel structure for placement rules
+    existing_bodies = asset_feed_spec.get('bodies', [])
+    existing_titles = asset_feed_spec.get('titles', [])
+    default_body_labels = existing_bodies[0].get('adlabels', []) if existing_bodies else []
+    default_title_labels = existing_titles[0].get('adlabels', []) if existing_titles else []
+    
+    # For dynamic creative, use simpler structure - just text; API may assign labels
+    new_bodies = [{'text': t, 'adlabels': default_body_labels} if default_body_labels else {'text': t} for t in bodies if t.strip()]
+    new_titles = [{'text': t, 'adlabels': default_title_labels} if default_title_labels else {'text': t} for t in titles if t.strip()]
+    
+    if not new_bodies:
+        return {'success': False, 'error': 'At least one body text required'}
+    if not new_titles:
+        return {'success': False, 'error': 'At least one title required'}
+    
+    # 3. Build new asset_feed_spec (preserve videos, call_to_actions, etc.)
+    new_spec = copy.deepcopy(asset_feed_spec)
+    new_spec['bodies'] = new_bodies
+    new_spec['titles'] = new_titles
+    
+    # 4. Create new creative
+    create_url = f"{FB_GRAPH_URL}/{act_id}/adcreatives"
+    create_data = {
+        'access_token': access_token,
+        'asset_feed_spec': new_spec,
+        'object_story_spec': creative_resp.get('object_story_spec'),
+        'name': f'Updated creative {creative_id}'
+    }
+    create_resp = _make_graph_api_post(create_url, create_data)
+    
+    if 'error' in create_resp:
+        return {'success': False, 'error': create_resp.get('error', {}).get('message', str(create_resp))}
+    
+    new_creative_id = create_resp.get('id')
+    if not new_creative_id:
+        return {'success': False, 'error': 'No creative ID in create response'}
+    
+    # 5. Update ad to use new creative (POST with update fields)
+    patch_url = f"{FB_GRAPH_URL}/{ad_id}"
+    patch_data = {
+        'access_token': access_token,
+        'creative': json.dumps({'creative_id': new_creative_id}),
+    }
+    patch_resp = _make_graph_api_post(patch_url, patch_data)
+    
+    if 'error' in patch_resp:
+        return {
+            'success': False,
+            'new_creative_id': new_creative_id,
+            'error': f"Creative created but ad update failed: {patch_resp.get('error', {}).get('message')}"
+        }
+    
+    return {
+        'success': True,
+        'new_creative_id': new_creative_id,
+        'message': f'Creative updated. Ad {ad_id} now uses creative {new_creative_id}.',
+    }
+
+
+@mcp.tool()
+def get_leadgen_forms(page_id: str, limit: Optional[int] = 25) -> Dict:
+    """Lista los formularios Lead Gen existentes de una página de Facebook.
+    
+    Usa el ID del formulario existente en create_lead_gen_test_campaign (lead_form_id).
+    
+    Args:
+        page_id (str): Facebook Page ID
+        limit (Optional[int]): Máximo de formularios a devolver. Default 25.
+    
+    Returns:
+        Dict con data: [{id, name, status, ...}, ...]
+    """
+    access_token = _get_fb_access_token()
+    url = f"{FB_GRAPH_URL}/{page_id}/leadgen_forms"
+    params = {'access_token': access_token, 'fields': 'id,name,status', 'limit': limit or 25}
+    return _make_graph_api_call(url, params)
+
+
+@mcp.tool()
+def create_lead_gen_test_campaign(
+    act_id: str,
+    page_id: str,
+    lead_form_id: str,
+    daily_budget_cop: int = 10000,
+    bodies: Optional[List[str]] = None,
+    titles: Optional[List[str]] = None,
+    template_creative_id: Optional[str] = None,
+) -> Dict:
+    """Crea una campaña Lead Gen usando un formulario EXISTENTE de la página, con Dynamic Creative (5 cuerpos + 5 títulos).
+    
+    Crea: Campaña (OUTCOME_LEADS) → Ad Set → Creative (5 textos + 5 títulos) → Anuncio.
+    Usa el formulario lead que ya existe en la página (obtén el ID con get_leadgen_forms). No crea formularios nuevos.
+
+    Args:
+        act_id (str): ID de cuenta de ads (ej. act_215272717429201)
+        page_id (str): Facebook Page ID
+        lead_form_id (str): ID del formulario lead EXISTENTE de la página (usa get_leadgen_forms para listarlos)
+        daily_budget_cop (int): Presupuesto diario en COP. Default 10000.
+        bodies (Optional[List[str]]): 5 opciones de texto principal.
+        titles (Optional[List[str]]): 5 opciones de título.
+        template_creative_id (Optional[str]): Creative ID para clonar videos/imágenes. Requerido.
+
+    Returns:
+        Dict con campaign_id, adset_id, creative_id, ad_id, o error.
+    """
+    try:
+        return _create_lead_gen_campaign_impl(act_id, page_id, lead_form_id, daily_budget_cop, bodies, titles, template_creative_id)
+    except Exception as e:
+        return {'success': False, 'error': str(e)}
+
+
+def _create_lead_gen_campaign_impl(
+    act_id: str,
+    page_id: str,
+    lead_form_id: str,
+    daily_budget_cop: int,
+    bodies: Optional[List[str]],
+    titles: Optional[List[str]],
+    template_creative_id: Optional[str],
+) -> Dict:
+    access_token = _get_fb_access_token()
+    
+    default_bodies = [
+        "Tu sonrisa perfecta no tiene que costar una fortuna ✨ Con Microdiseño transformamos tu sonrisa. ¡Deja tus datos y te contactamos!",
+        "¿Inseguridad con tu sonrisa? El Microdiseño es la alternativa: más conservador, más económico. Completa el formulario.",
+        "El Microdiseño de Sonrisa es la nueva tendencia en estética dental. Menos invasivo, resultados increíbles. ¿Lista? Regístrate aquí.",
+        "Dale un upgrade a tu sonrisa sin sacrificar tus dientes. Microdiseño = menos costo, más naturalidad. Solicita información.",
+        "¿Sabías que puedes lograr la sonrisa que quieres sin carillas? Con Microdiseño conservamos tus dientes. ¡Deja tus datos!",
+    ]
+    default_titles = [
+        "Tu Mejor Sonrisa, Menos Invasivo",
+        "Valoración de Sonrisa Gratis",
+        "Microdiseño: Estética Sin Carillas",
+        "Transforma Tu Sonrisa Hoy",
+        "Reserva Tu Cita Sin Compromiso",
+    ]
+    bodies = bodies or default_bodies
+    titles = titles or default_titles
+    if len(bodies) < 5:
+        bodies = bodies + default_bodies[len(bodies):5]
+    if len(titles) < 5:
+        titles = titles + default_titles[len(titles):5]
+    bodies = [b for b in bodies[:5] if b and str(b).strip()]
+    titles = [t for t in titles[:5] if t and str(t).strip()]
+    if not bodies or not titles:
+        return {'success': False, 'error': 'Se requieren al menos 1 body y 1 title'}
+    if not template_creative_id:
+        return {'success': False, 'error': 'Se requiere template_creative_id para clonar videos/imágenes.'}
+
+    # Usa el formulario existente (lead_form_id proporcionado por el usuario)
+    # No creamos formulario nuevo
+
+    # 1. Create campaign (OUTCOME_LEADS)
+    campaign_url = f"{FB_GRAPH_URL}/{act_id}/campaigns"
+    campaign_data = {
+        'access_token': access_token,
+        'name': 'Prueba Lead Gen Form - 5 textos 5 titulos',
+        'objective': 'OUTCOME_LEADS',
+        'status': 'PAUSED',
+        'special_ad_categories': '[]',
+        'daily_budget': str(daily_budget_cop),
+    }
+    campaign_resp = _make_graph_api_post(campaign_url, campaign_data)
+    if campaign_resp.get('error'):
+        fb_err = campaign_resp['error']
+        msg = fb_err.get('message', str(fb_err))
+        return {'success': False, 'error': f"Campaign: {msg}"}
+    campaign_id = campaign_resp.get('id')
+    if not campaign_id:
+        return {'success': False, 'error': 'No campaign_id en respuesta'}
+
+    # 2. Create ad set (LEAD_GENERATION optimization)
+    adset_url = f"{FB_GRAPH_URL}/{act_id}/adsets"
+    targeting = {'geo_locations': {'countries': ['CO']}, 'age_min': 18, 'age_max': 65}
+    adset_data = {
+        'access_token': access_token,
+        'name': 'Ad set prueba Form - Colombia',
+        'campaign_id': campaign_id,
+        'billing_event': 'IMPRESSIONS',
+        'optimization_goal': 'LEAD_GENERATION',
+        'promoted_object': json.dumps({'page_id': page_id}),
+        'targeting': json.dumps(targeting),
+        'status': 'PAUSED',
+    }
+    adset_resp = _make_graph_api_post(adset_url, adset_data)
+    if adset_resp.get('error'):
+        err = adset_resp['error']
+        msg = err.get('message', str(err))
+        subcode = err.get('error_subcode')
+        code = err.get('code')
+        return {'success': False, 'campaign_id': campaign_id, 'error': f"Ad set: {msg}", 'fb_code': code, 'fb_subcode': subcode}
+    adset_id = adset_resp.get('id')
+    if not adset_id:
+        return {'success': False, 'campaign_id': campaign_id, 'error': 'No adset_id en respuesta'}
+
+    # 3. Build creative - clone template, replace CTA with Lead Form
+    cr = _make_graph_api_call(
+        f"{FB_GRAPH_URL}/{template_creative_id}",
+        {'access_token': access_token, 'fields': 'asset_feed_spec,object_story_spec'}
+    )
+    if cr.get('error'):
+        return {'success': False, 'campaign_id': campaign_id, 'adset_id': adset_id, 'error': f"Template: {cr.get('error', {}).get('message')}"}
+    
+    asset_feed_spec = copy.deepcopy(cr.get('asset_feed_spec') or {})
+    object_story_spec = cr.get('object_story_spec') or {'page_id': page_id}
+    
+    # Replace call_to_actions with Lead Form SIGN_UP (formulario existente)
+    asset_feed_spec['call_to_action_types'] = ['SIGN_UP']
+    asset_feed_spec['call_to_actions'] = [{
+        'type': 'SIGN_UP',
+        'value': {'lead_gen_form_id': lead_form_id, 'link': 'https://www.facebook.com/'}
+    }]
+    
+    # Update bodies and titles
+    bl = asset_feed_spec.get('bodies', [{}])
+    tl = asset_feed_spec.get('titles', [{}])
+    body_labels = bl[0].get('adlabels', []) if bl else []
+    title_labels = tl[0].get('adlabels', []) if tl else []
+    asset_feed_spec['bodies'] = [{'text': t, 'adlabels': body_labels} if body_labels else {'text': t} for t in bodies]
+    asset_feed_spec['titles'] = [{'text': t, 'adlabels': title_labels} if title_labels else {'text': t} for t in titles]
+
+    creative_url = f"{FB_GRAPH_URL}/{act_id}/adcreatives"
+    creative_data = {
+        'access_token': access_token,
+        'name': f'Prueba Lead Gen Form - {len(bodies)} textos, {len(titles)} títulos',
+        'asset_feed_spec': asset_feed_spec,
+        'object_story_spec': object_story_spec,
+    }
+    creative_resp = _make_graph_api_post(creative_url, creative_data)
+    if 'error' in creative_resp:
+        return {'success': False, 'campaign_id': campaign_id, 'adset_id': adset_id, 'error': f"Creative: {creative_resp.get('error', {}).get('message')}"}
+    creative_id = creative_resp.get('id')
+    if not creative_id:
+        return {'success': False, 'campaign_id': campaign_id, 'adset_id': adset_id, 'error': 'No creative_id in response'}
+
+    # 4. Create ad
+    ad_url = f"{FB_GRAPH_URL}/{act_id}/ads"
+    ad_data = {
+        'access_token': access_token,
+        'name': 'Ad prueba - 5 textos x 5 títulos',
+        'adset_id': adset_id,
+        'creative': json.dumps({'creative_id': creative_id}),
+        'status': 'PAUSED',
+    }
+    ad_resp = _make_graph_api_post(ad_url, ad_data)
+    if 'error' in ad_resp:
+        return {
+            'success': False, 'campaign_id': campaign_id, 'adset_id': adset_id, 'creative_id': creative_id,
+            'error': f"Ad: {ad_resp.get('error', {}).get('message')}"
+        }
+    ad_id = ad_resp.get('id')
+
+    return {
+        'success': True,
+        'lead_form_id': lead_form_id,
+        'campaign_id': campaign_id,
+        'adset_id': adset_id,
+        'creative_id': creative_id,
+        'ad_id': ad_id,
+        'message': f'Campaña Lead Gen creada con formulario existente. 5 textos y 5 títulos. Presupuesto: {daily_budget_cop} COP/día. Estado: PAUSED.',
+    }
 
 
 @mcp.tool()
@@ -2293,5 +2639,17 @@ def get_activities_by_adset(
 
 if __name__ == "__main__":
     _get_fb_access_token()
-    mcp.run(transport='stdio')
+
+    # Use HTTP transport when TRANSPORT=http (for Docker/Dockploy remote deployment)
+    # Allows Cursor and Antigravity to connect via URL
+    if os.environ.get("TRANSPORT", "").lower() == "http":
+        import uvicorn
+
+        host = os.environ.get("HOST", "0.0.0.0")
+        port = int(os.environ.get("PORT", "8000"))
+        app = mcp.streamable_http_app()
+        print(f"Starting MCP server at http://{host}:{port}/mcp (streamable HTTP)")
+        uvicorn.run(app, host=host, port=port)
+    else:
+        mcp.run(transport="stdio")
     
