@@ -1170,6 +1170,7 @@ def _create_lead_gen_campaign_impl(
     # No creamos formulario nuevo
 
     # 1. Create campaign (OUTCOME_LEADS)
+    # Según guía Lead Forms for Ads: budget va en ad set, no en campaña
     campaign_url = f"{FB_GRAPH_URL}/{act_id}/campaigns"
     campaign_data = {
         'access_token': access_token,
@@ -1177,7 +1178,7 @@ def _create_lead_gen_campaign_impl(
         'objective': 'OUTCOME_LEADS',
         'status': 'PAUSED',
         'special_ad_categories': '[]',
-        'daily_budget': str(daily_budget_cop),
+        'buying_type': 'AUCTION',
     }
     campaign_resp = _make_graph_api_post(campaign_url, campaign_data)
     if campaign_resp.get('error'):
@@ -1189,9 +1190,12 @@ def _create_lead_gen_campaign_impl(
         return {'success': False, 'error': 'No campaign_id en respuesta'}
 
     # 2. Create ad set (LEAD_GENERATION optimization)
-    # Para OUTCOME_LEADS con formularios nativos, Meta exige promoted_object (page_id) y destination_type ON_AD
+    # Para OUTCOME_LEADS con formularios nativos, Meta exige: promoted_object, destination_type ON_AD,
+    # daily_budget, bid_amount (guía Lead Forms for Ads). Usamos promoted_object como objeto {page_id}.
     adset_url = f"{FB_GRAPH_URL}/{act_id}/adsets"
     targeting = {'geo_locations': {'countries': ['CO']}, 'age_min': 18, 'age_max': 65}
+    # bid_amount: mínimo razonable en centavos/centésimos (ej. 1000 = 10 unidades). Meta valida mínimos.
+    bid_amount_cents = max(100, daily_budget_cop // 20)
     adset_data = {
         'access_token': access_token,
         'name': 'Ad set prueba Form - Colombia',
@@ -1199,11 +1203,16 @@ def _create_lead_gen_campaign_impl(
         'billing_event': 'IMPRESSIONS',
         'optimization_goal': 'LEAD_GENERATION',
         'promoted_object': json.dumps({'page_id': page_id}),
+        'destination_type': 'ON_AD',
+        'daily_budget': str(daily_budget_cop),
+        'bid_amount': str(bid_amount_cents),
         'targeting': json.dumps(targeting),
         'status': 'PAUSED',
-        'destination_type': 'ON_AD',  # Formularios nativos en el anuncio (evita error 1815857)
         'is_dynamic_creative': 'true',
     }
+    # DEBUG - ver payload exacto
+    print(f"DEBUG ADSET URL: {adset_url}")
+    print(f"DEBUG ADSET DATA: {json.dumps({k:v for k,v in adset_data.items() if k != 'access_token'}, indent=2, default=str)}")
     adset_resp = _make_graph_api_post(adset_url, adset_data)
     if adset_resp.get('error'):
         err = adset_resp['error']
