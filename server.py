@@ -11,7 +11,7 @@ import sys
     
 
 # --- Constants ---
-FB_API_VERSION = "v22.0"
+FB_API_VERSION = os.environ.get("META_API_VERSION", "v25.0")
 FB_GRAPH_URL = f"https://graph.facebook.com/{FB_API_VERSION}"
 DEFAULT_AD_ACCOUNT_FIELDS = [
     'name', 'business_name', 'age', 'account_status', 'balance',
@@ -1098,7 +1098,7 @@ def create_lead_gen_test_campaign(
     daily_budget_cop: int = 10000,
     bodies: Optional[List[str]] = None,
     titles: Optional[List[str]] = None,
-    template_creative_id: Optional[str] = None,
+    template_creative_id = None,
 ) -> Dict:
     """Crea una campaña Lead Gen usando un formulario EXISTENTE de la página, con Dynamic Creative (5 cuerpos + 5 títulos).
     
@@ -1130,10 +1130,15 @@ def _create_lead_gen_campaign_impl(
     daily_budget_cop: int,
     bodies: Optional[List[str]],
     titles: Optional[List[str]],
-    template_creative_id: Optional[str],
+    template_creative_id = None,
 ) -> Dict:
     access_token = _get_fb_access_token()
-    
+    # Forzar IDs a string (Pydantic los parsea como int si son solo dígitos)
+    if template_creative_id is not None:
+        template_creative_id = str(template_creative_id)
+    lead_form_id = str(lead_form_id)
+    page_id = str(page_id)
+
     default_bodies = [
         "Tu sonrisa perfecta no tiene que costar una fortuna ✨ Con Microdiseño transformamos tu sonrisa. ¡Deja tus datos y te contactamos!",
         "¿Inseguridad con tu sonrisa? El Microdiseño es la alternativa: más conservador, más económico. Completa el formulario.",
@@ -1184,6 +1189,7 @@ def _create_lead_gen_campaign_impl(
         return {'success': False, 'error': 'No campaign_id en respuesta'}
 
     # 2. Create ad set (LEAD_GENERATION optimization)
+    # Para OUTCOME_LEADS con formularios nativos, Meta exige promoted_object (page_id) y destination_type ON_AD
     adset_url = f"{FB_GRAPH_URL}/{act_id}/adsets"
     targeting = {'geo_locations': {'countries': ['CO']}, 'age_min': 18, 'age_max': 65}
     adset_data = {
@@ -1195,6 +1201,8 @@ def _create_lead_gen_campaign_impl(
         'promoted_object': json.dumps({'page_id': page_id}),
         'targeting': json.dumps(targeting),
         'status': 'PAUSED',
+        'destination_type': 'ON_AD',  # Formularios nativos en el anuncio (evita error 1815857)
+        'is_dynamic_creative': True,
     }
     adset_resp = _make_graph_api_post(adset_url, adset_data)
     if adset_resp.get('error'):
