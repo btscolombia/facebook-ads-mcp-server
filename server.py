@@ -1202,7 +1202,7 @@ def _create_lead_gen_campaign_impl(
         'targeting': json.dumps(targeting),
         'status': 'PAUSED',
         'destination_type': 'ON_AD',  # Formularios nativos en el anuncio (evita error 1815857)
-        'is_dynamic_creative': True,
+        'is_dynamic_creative': 'true',
     }
     adset_resp = _make_graph_api_post(adset_url, adset_data)
     if adset_resp.get('error'):
