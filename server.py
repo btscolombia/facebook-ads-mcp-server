@@ -1169,8 +1169,7 @@ def _create_lead_gen_campaign_impl(
     # Usa el formulario existente (lead_form_id proporcionado por el usuario)
     # No creamos formulario nuevo
 
-    # 1. Create campaign (OUTCOME_LEADS)
-    # Según guía Lead Forms for Ads: budget va en ad set, no en campaña
+    # 1. Create campaign (OUTCOME_LEADS) - ABO (presupuesto en Ad Set)
     campaign_url = f"{FB_GRAPH_URL}/{act_id}/campaigns"
     campaign_data = {
         'access_token': access_token,
@@ -1178,8 +1177,8 @@ def _create_lead_gen_campaign_impl(
         'objective': 'OUTCOME_LEADS',
         'status': 'PAUSED',
         'special_ad_categories': '[]',
-        'buying_type': 'AUCTION',
     }
+    print(f"DEBUG CAMPAIGN DATA: {json.dumps({k:v for k,v in campaign_data.items() if k != 'access_token'}, indent=2, default=str)}")
     campaign_resp = _make_graph_api_post(campaign_url, campaign_data)
     if campaign_resp.get('error'):
         fb_err = campaign_resp['error']
@@ -1188,14 +1187,11 @@ def _create_lead_gen_campaign_impl(
     campaign_id = campaign_resp.get('id')
     if not campaign_id:
         return {'success': False, 'error': 'No campaign_id en respuesta'}
+    print(f"DEBUG CAMPAIGN CREATED: {campaign_id}")
 
-    # 2. Create ad set (LEAD_GENERATION optimization)
-    # Para OUTCOME_LEADS con formularios nativos, Meta exige: promoted_object, destination_type ON_AD,
-    # daily_budget, bid_amount (guía Lead Forms for Ads). Usamos promoted_object como objeto {page_id}.
+    # 2. Create ad set (LEAD_GENERATION + Dynamic Creative)
     adset_url = f"{FB_GRAPH_URL}/{act_id}/adsets"
     targeting = {'geo_locations': {'countries': ['CO']}, 'age_min': 18, 'age_max': 65}
-    # bid_amount: mínimo razonable en centavos/centésimos (ej. 1000 = 10 unidades). Meta valida mínimos.
-    bid_amount_cents = max(100, daily_budget_cop // 20)
     adset_data = {
         'access_token': access_token,
         'name': 'Ad set prueba Form - Colombia',
@@ -1205,12 +1201,11 @@ def _create_lead_gen_campaign_impl(
         'promoted_object': json.dumps({'page_id': page_id}),
         'destination_type': 'ON_AD',
         'daily_budget': str(daily_budget_cop),
-        'bid_amount': str(bid_amount_cents),
+        'bid_strategy': 'LOWEST_COST_WITHOUT_CAP',
         'targeting': json.dumps(targeting),
         'status': 'PAUSED',
         'is_dynamic_creative': 'true',
     }
-    # DEBUG - ver payload exacto
     print(f"DEBUG ADSET URL: {adset_url}")
     print(f"DEBUG ADSET DATA: {json.dumps({k:v for k,v in adset_data.items() if k != 'access_token'}, indent=2, default=str)}")
     adset_resp = _make_graph_api_post(adset_url, adset_data)
