@@ -1100,6 +1100,7 @@ def create_lead_gen_test_campaign(
     bodies: Optional[List[str]] = None,
     titles: Optional[List[str]] = None,
     template_creative_id = None,
+    is_cbo: bool = False,
 ) -> Dict:
     """Crea una campaña Lead Gen usando un formulario EXISTENTE de la página, con Dynamic Creative (5 cuerpos + 5 títulos).
     
@@ -1132,6 +1133,7 @@ def _create_lead_gen_campaign_impl(
     bodies: Optional[List[str]],
     titles: Optional[List[str]],
     template_creative_id = None,
+    is_cbo: bool = False,
 ) -> Dict:
     access_token = _get_fb_access_token()
     # Forzar IDs a string (Pydantic los parsea como int si son solo dígitos)
@@ -1170,7 +1172,7 @@ def _create_lead_gen_campaign_impl(
     # Usa el formulario existente (lead_form_id proporcionado por el usuario)
     # No creamos formulario nuevo
 
-    # 1. Create campaign (OUTCOME_LEADS) - ABO (presupuesto en Ad Set)
+    # 1. Create campaign (OUTCOME_LEADS)
     campaign_url = f"{FB_GRAPH_URL}/{act_id}/campaigns"
     campaign_data = {
         'access_token': access_token,
@@ -1178,8 +1180,14 @@ def _create_lead_gen_campaign_impl(
         'objective': 'OUTCOME_LEADS',
         'status': 'PAUSED',
         'special_ad_categories': json.dumps(['NONE']),
-        'is_adset_budget_sharing_enabled': 'False',
     }
+    
+    if is_cbo:
+        campaign_data['daily_budget'] = str(daily_budget_cop)
+        campaign_data['bid_strategy'] = 'LOWEST_COST_WITHOUT_CAP'
+    else:
+        campaign_data['is_adset_budget_sharing_enabled'] = 'False'
+
     print(f"DEBUG CAMPAIGN DATA: {json.dumps({k:v for k,v in campaign_data.items() if k != 'access_token'}, indent=2, default=str)}")
     campaign_resp = _make_graph_api_post(campaign_url, campaign_data)
     if campaign_resp.get('error'):
@@ -1202,12 +1210,15 @@ def _create_lead_gen_campaign_impl(
         'optimization_goal': 'LEAD_GENERATION',
         'promoted_object': json.dumps({'page_id': page_id}),
         'destination_type': 'ON_AD',
-        'daily_budget': str(daily_budget_cop),
-        'bid_strategy': 'LOWEST_COST_WITHOUT_CAP',
         'targeting': json.dumps(targeting),
         'status': 'PAUSED',
         'is_dynamic_creative': 'true',
     }
+    
+    if not is_cbo:
+        adset_data['daily_budget'] = str(daily_budget_cop)
+        adset_data['bid_strategy'] = 'LOWEST_COST_WITHOUT_CAP'
+
     print(f"DEBUG ADSET URL: {adset_url}")
     print(f"DEBUG ADSET DATA: {json.dumps({k:v for k,v in adset_data.items() if k != 'access_token'}, indent=2, default=str)}")
     adset_resp = _make_graph_api_post(adset_url, adset_data)
