@@ -2649,7 +2649,14 @@ if __name__ == "__main__":
         port = int(os.environ.get("PORT", "8000"))
         app = mcp.streamable_http_app()
         print(f"Starting MCP server at http://{host}:{port}/mcp (streamable HTTP)")
-        uvicorn.run(app, host=host, port=port)
+        # proxy_headers + forwarded_allow_ips: required behind reverse proxy (Dockploy) to avoid "Invalid Host header"
+        uvicorn.run(
+            app,
+            host=host,
+            port=port,
+            proxy_headers=True,
+            forwarded_allow_ips="*",
+        )
     else:
         mcp.run(transport="stdio")
     
