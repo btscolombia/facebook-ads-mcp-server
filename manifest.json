@@ -112,6 +112,18 @@
     {
       "name": "get_activities_by_adset",
       "description": "Retrieves change history for an ad set"
+    },
+    {
+      "name": "update_ad_creative_assets",
+      "description": "Updates primary text (bodies) and titles of an ad creative for Dynamic Creative (5 texts + 5 titles)"
+    },
+    {
+      "name": "create_lead_gen_test_campaign",
+      "description": "Creates a Lead Gen campaign with Dynamic Creative (5 cuerpos + 5 títulos)"
+    },
+    {
+      "name": "get_leadgen_forms",
+      "description": "Lists Lead Gen forms for a Facebook Page"
     }
   ],
   "keywords": [

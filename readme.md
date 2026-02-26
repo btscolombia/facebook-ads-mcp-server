@@ -166,6 +166,10 @@ This MCP server provides tools for interacting with META Ads objects and data:
 | **Activity/Change History**     |                                                          |
 | `get_activities_by_adaccount`   | Retrieves change history for an ad account.              |
 | `get_activities_by_adset`       | Retrieves change history for an ad set.                  |
+| **Dynamic Creative (5 textos + 5 títulos)** |                                                |
+| `update_ad_creative_assets`     | Updates primary text (bodies) and titles of an ad creative. Use for Dynamic Creative A/B testing (5 texts + 5 titles). |
+| `create_lead_gen_test_campaign` | Creates a Lead Gen campaign with Dynamic Creative (5 cuerpos + 5 títulos) using an existing form. |
+| `get_leadgen_forms`             | Lists Lead Gen forms for a Facebook Page (used by create_lead_gen_test_campaign). |
 
 *(Note: Most tools support additional parameters like `fields`, `filtering`, `limit`, pagination, date ranges, etc. Refer to the detailed docstrings within `server.py` for the full list and description of arguments for each tool.)*
 
