@@ -102,6 +102,7 @@ def _make_graph_api_post(url: str, data: Dict[str, Any]) -> Dict:
         if not response.ok:
             err_msg = parsed.get('error', {}).get('message', response.text or str(response.status_code))
             print(f"Graph API POST {url}: {response.status_code} - {err_msg}")
+            print(f"FULL ERROR RESPONSE: {json.dumps(parsed, indent=2, default=str)}")
             return parsed  # Return body so caller can check 'error' key
         return parsed
     except requests.exceptions.RequestException as e:
@@ -1177,6 +1178,7 @@ def _create_lead_gen_campaign_impl(
         'objective': 'OUTCOME_LEADS',
         'status': 'PAUSED',
         'special_ad_categories': json.dumps(['NONE']),
+        'daily_budget': str(daily_budget_cop),
     }
     print(f"DEBUG CAMPAIGN DATA: {json.dumps({k:v for k,v in campaign_data.items() if k != 'access_token'}, indent=2, default=str)}")
     campaign_resp = _make_graph_api_post(campaign_url, campaign_data)
