@@ -108,6 +108,7 @@ For remote deployment (Docker/Dockploy), the server supports **Streamable HTTP**
 | `PORT` | No | Port to listen on (default: 8000) |
 | `HOST` | No | Host to bind (default: 0.0.0.0) |
 | `ALLOWED_HOSTS` | No | Comma-separated list of allowed Host headers (e.g. `metamcp.example.com`). If empty with TRANSPORT=http, Host validation is disabled for proxy deployments. |
+| | | *Nota: Con TRANSPORT=http el servidor usa modo stateless (cada petición independiente, sin session ID) para compatibilidad con Antigravity y mcp-proxy.* |
 
 **Example Dockploy env:**
 ```
@@ -123,17 +124,25 @@ The MCP endpoint will be available at `https://your-domain.com/mcp`
 - **URL:** `https://metamcp.agencybts.com/mcp` (use your domain)
 - **Headers:** (optional) Add `Authorization` if you add auth later
 
-**Antigravity Configuration** (Settings → MCP):
-Add to your MCP config:
+**Antigravity Configuration:**
+1. Abre Antigravity → menú "..." del panel del agente → **MCP Servers** → **Manage MCP Servers**
+2. Haz clic en **View raw config** para editar `mcp_config.json`
+3. Ubicación del archivo: `~/.gemini/antigravity/mcp_config.json` (macOS/Linux) o `C:\Users\<USER>\\.gemini\antigravity\mcp_config.json` (Windows)
+4. Añade o edita la entrada (Antigravity usa `serverUrl` para servidores HTTP):
+
 ```json
 {
   "mcpServers": {
     "meta-ads": {
-      "url": "https://metamcp.agencybts.com/mcp"
+      "serverUrl": "https://metamcp.agencybts.com/mcp"
     }
   }
 }
 ```
+
+5. Reinicia Antigravity para que cargue la configuración
+
+**Varios clientes (una cuenta por carpeta):** El MCP remoto usa un solo token y lista todas las cuentas. Para que el agente use la cuenta correcta en cada cliente, crea `META_ADS_CONTEXT.md` en la raíz de cada carpeta de cliente con el act_id y page_id. Ver [docs/ANTIGRAVITY-CLIENTES.md](docs/ANTIGRAVITY-CLIENTES.md).
 
 ### Available MCP Tools
 

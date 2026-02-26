@@ -2658,6 +2658,10 @@ if __name__ == "__main__":
     if os.environ.get("TRANSPORT", "").lower() == "http":
         import uvicorn
 
+        # Stateless HTTP: cada petición es independiente, no requiere session ID.
+        # Necesario para Antigravity y otros clientes que no mantienen session (mcp-proxy).
+        mcp.settings.stateless_http = True
+
         host = os.environ.get("HOST", "0.0.0.0")
         port = int(os.environ.get("PORT", "8000"))
         app = mcp.streamable_http_app()
