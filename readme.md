@@ -107,6 +107,7 @@ For remote deployment (Docker/Dockploy), the server supports **Streamable HTTP**
 | `FB_TOKEN` | Yes | Meta/Facebook access token |
 | `PORT` | No | Port to listen on (default: 8000) |
 | `HOST` | No | Host to bind (default: 0.0.0.0) |
+| `ALLOWED_HOSTS` | No | Comma-separated list of allowed Host headers (e.g. `metamcp.example.com`). If empty with TRANSPORT=http, Host validation is disabled for proxy deployments. |
 
 **Example Dockploy env:**
 ```

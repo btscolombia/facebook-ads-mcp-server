@@ -1,5 +1,6 @@
 # server.py
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 import copy
 import requests
 from typing import Dict, List, Optional, Any
@@ -19,8 +20,20 @@ DEFAULT_AD_ACCOUNT_FIELDS = [
     'created_time', 'id'
 ]
 
+# Transport security: when TRANSPORT=http (Dockploy), allow domain via ALLOWED_HOSTS or disable Host check
+_transport_security = None
+if os.environ.get("TRANSPORT", "").lower() == "http":
+    allowed = os.environ.get("ALLOWED_HOSTS", "").strip()
+    if allowed:
+        _transport_security = TransportSecuritySettings(
+            enable_dns_rebinding_protection=True,
+            allowed_hosts=[h.strip() for h in allowed.split(",") if h.strip()],
+        )
+    else:
+        _transport_security = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
 # Create an MCP server
-mcp = FastMCP("fb-api-mcp-server")
+mcp = FastMCP("fb-api-mcp-server", transport_security=_transport_security)
 
 # Add a global variable to store the token
 FB_ACCESS_TOKEN = None
