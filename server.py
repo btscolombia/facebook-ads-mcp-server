@@ -1176,7 +1176,7 @@ def _create_lead_gen_campaign_impl(
         'name': 'Prueba Lead Gen Form - 5 textos 5 titulos',
         'objective': 'OUTCOME_LEADS',
         'status': 'PAUSED',
-        'special_ad_categories': '[]',
+        'special_ad_categories': json.dumps(['NONE']),
     }
     print(f"DEBUG CAMPAIGN DATA: {json.dumps({k:v for k,v in campaign_data.items() if k != 'access_token'}, indent=2, default=str)}")
     campaign_resp = _make_graph_api_post(campaign_url, campaign_data)
