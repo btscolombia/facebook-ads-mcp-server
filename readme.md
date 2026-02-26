@@ -108,7 +108,7 @@ For remote deployment (Docker/Dockploy), the server supports **Streamable HTTP**
 | `PORT` | No | Port to listen on (default: 8000) |
 | `HOST` | No | Host to bind (default: 0.0.0.0) |
 | `ALLOWED_HOSTS` | No | Comma-separated list of allowed Host headers (e.g. `metamcp.example.com`). If empty with TRANSPORT=http, Host validation is disabled for proxy deployments. |
-| | | *Nota: Con TRANSPORT=http el servidor usa modo stateless (cada petición independiente, sin session ID) para compatibilidad con Antigravity y mcp-proxy.* |
+| | | *Con TRANSPORT=http: stateless + json_response (respuestas JSON directas, sin envoltura SSE) para n8n, Antigravity y clientes HTTP.* |
 
 **Example Dockploy env:**
 ```

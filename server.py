@@ -2661,6 +2661,8 @@ if __name__ == "__main__":
         # Stateless HTTP: cada petición es independiente, no requiere session ID.
         # Necesario para Antigravity y otros clientes que no mantienen session (mcp-proxy).
         mcp.settings.stateless_http = True
+        # JSON response: devuelve JSON directo en lugar de SSE. Mejor para n8n, bridge de Antigravity, y clientes HTTP simples.
+        mcp.settings.json_response = True
 
         host = os.environ.get("HOST", "0.0.0.0")
         port = int(os.environ.get("PORT", "8000"))
