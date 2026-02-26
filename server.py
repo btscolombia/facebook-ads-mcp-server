@@ -1179,6 +1179,7 @@ def _create_lead_gen_campaign_impl(
         'status': 'PAUSED',
         'special_ad_categories': json.dumps(['NONE']),
         'daily_budget': str(daily_budget_cop),
+        'bid_strategy': 'LOWEST_COST_WITHOUT_CAP',
     }
     print(f"DEBUG CAMPAIGN DATA: {json.dumps({k:v for k,v in campaign_data.items() if k != 'access_token'}, indent=2, default=str)}")
     campaign_resp = _make_graph_api_post(campaign_url, campaign_data)
@@ -1202,8 +1203,6 @@ def _create_lead_gen_campaign_impl(
         'optimization_goal': 'LEAD_GENERATION',
         'promoted_object': json.dumps({'page_id': page_id}),
         'destination_type': 'ON_AD',
-        'daily_budget': str(daily_budget_cop),
-        'bid_strategy': 'LOWEST_COST_WITHOUT_CAP',
         'targeting': json.dumps(targeting),
         'status': 'PAUSED',
         'is_dynamic_creative': 'true',
