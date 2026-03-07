@@ -2675,6 +2675,188 @@ def get_activities_by_adset(
     return _make_graph_api_call(url, params)
 
 
+
+# --- Instagram Media Tools ---
+
+@mcp.tool()
+def get_instagram_account_id(page_id: str) -> Dict:
+    """Gets the Instagram Business Account ID linked to a Facebook Page.
+    
+    This is required before calling any Instagram media tools, because the
+    Instagram Graph API uses a different ID than the Facebook Page ID.
+    
+    Args:
+        page_id (str): The Facebook Page ID (e.g., '123456789').
+    
+    Returns:
+        Dict: A dictionary containing the Instagram Business Account ID
+              under the key 'instagram_business_account'. Example:
+              {"instagram_business_account": {"id": "17841400..."}, "id": "page_id"}
+              
+    Example:
+        ```python
+        result = get_instagram_account_id(page_id="123456789")
+        ig_account_id = result["instagram_business_account"]["id"]
+        ```
+    """
+    access_token = _get_fb_access_token()
+    url = f"{FB_GRAPH_URL}/{page_id}"
+    params = {
+        'access_token': access_token,
+        'fields': 'instagram_business_account'
+    }
+    return _make_graph_api_call(url, params)
+
+
+@mcp.tool()
+def get_instagram_media(
+    ig_user_id: str,
+    fields: Optional[List[str]] = None,
+    media_type_filter: Optional[str] = None,
+    limit: Optional[int] = 25,
+    after: Optional[str] = None,
+    before: Optional[str] = None
+) -> Dict:
+    """Lists Instagram media (posts, Reels, videos, carousels) for a business account.
+    
+    Use get_instagram_account_id first to obtain the ig_user_id from a Facebook Page ID.
+    This endpoint returns all published media for the Instagram professional account.
+    
+    Args:
+        ig_user_id (str): The Instagram Business Account ID (NOT the Facebook Page ID).
+            Obtain this via get_instagram_account_id.
+        fields (Optional[List[str]]): Fields to retrieve for each media item. If None,
+            defaults to a comprehensive set. Available fields include:
+            - 'id': Media ID
+            - 'caption': Caption text
+            - 'media_type': Type of media (IMAGE, VIDEO, CAROUSEL_ALBUM, REELS)
+            - 'media_url': URL of the media (images/videos). Not returned for CAROUSEL_ALBUM.
+            - 'thumbnail_url': Thumbnail URL (only for VIDEO and REELS)
+            - 'permalink': Permanent Instagram URL
+            - 'timestamp': ISO 8601 timestamp of publication
+            - 'like_count': Number of likes
+            - 'comments_count': Number of comments
+            - 'media_product_type': Product type (FEED, REELS, STORIES, etc.)
+            - 'username': Username of the owner
+            - 'is_shared_to_feed': Whether a Reel was shared to feed
+        media_type_filter (Optional[str]): Filter by media type after retrieval.
+            Options: 'IMAGE', 'VIDEO', 'CAROUSEL_ALBUM', 'REELS'.
+            Note: This is a client-side filter, not an API parameter.
+        limit (Optional[int]): Maximum number of media items per page. Default: 25. Max: 100.
+        after (Optional[str]): Pagination cursor for the next page.
+        before (Optional[str]): Pagination cursor for the previous page.
+    
+    Returns:
+        Dict: A dictionary with 'data' (list of media items) and 'paging' (pagination info).
+              If media_type_filter is set, only matching items are included in 'data'.
+    
+    Example:
+        ```python
+        # First get the IG account ID
+        ig_info = get_instagram_account_id(page_id="123456789")
+        ig_id = ig_info["instagram_business_account"]["id"]
+        
+        # List all Reels with engagement metrics
+        media = get_instagram_media(
+            ig_user_id=ig_id,
+            fields=["id", "caption", "media_type", "thumbnail_url", "permalink",
+                     "timestamp", "like_count", "comments_count", "media_product_type"],
+            media_type_filter="REELS",
+            limit=50
+        )
+        ```
+    """
+    default_fields = [
+        'id', 'caption', 'media_type', 'media_url', 'thumbnail_url',
+        'permalink', 'timestamp', 'like_count', 'comments_count',
+        'media_product_type'
+    ]
+    effective_fields = fields if fields is not None else default_fields
+    
+    access_token = _get_fb_access_token()
+    url = f"{FB_GRAPH_URL}/{ig_user_id}/media"
+    params = {
+        'access_token': access_token,
+        'fields': ','.join(effective_fields)
+    }
+    
+    if limit is not None:
+        params['limit'] = limit
+    if after is not None:
+        params['after'] = after
+    if before is not None:
+        params['before'] = before
+    
+    result = _make_graph_api_call(url, params)
+    
+    # Client-side filter by media_type or media_product_type (for REELS)
+    if media_type_filter and 'data' in result:
+        filter_upper = media_type_filter.upper()
+        filtered_data = []
+        for item in result['data']:
+            item_type = item.get('media_type', '').upper()
+            product_type = item.get('media_product_type', '').upper()
+            # Match on media_type OR media_product_type (Reels show as VIDEO media_type 
+            # but REELS media_product_type)
+            if item_type == filter_upper or product_type == filter_upper:
+                filtered_data.append(item)
+        result['data'] = filtered_data
+        result['_filter_applied'] = filter_upper
+        result['_filtered_count'] = len(filtered_data)
+    
+    return result
+
+
+@mcp.tool()
+def get_instagram_media_details(
+    media_id: str,
+    fields: Optional[List[str]] = None
+) -> Dict:
+    """Gets detailed information about a specific Instagram media item.
+    
+    Use this to get full details about a specific post, Reel, or video,
+    including insights and child media for carousels.
+    
+    Args:
+        media_id (str): The Instagram Media ID.
+        fields (Optional[List[str]]): Fields to retrieve. If None, defaults to
+            a comprehensive set. Available fields include:
+            - 'id': Media ID
+            - 'caption': Caption text
+            - 'media_type': IMAGE, VIDEO, CAROUSEL_ALBUM, or REELS
+            - 'media_url': URL of the media file
+            - 'thumbnail_url': Thumbnail (for VIDEO/REELS)
+            - 'permalink': Permanent Instagram link
+            - 'timestamp': Publication timestamp
+            - 'like_count': Number of likes
+            - 'comments_count': Number of comments
+            - 'media_product_type': FEED, REELS, STORIES, etc.
+            - 'username': Owner's username
+            - 'is_shared_to_feed': Whether Reel was shared to feed
+            - 'children': Child media items (for CAROUSEL_ALBUM)
+    
+    Returns:
+        Dict: A dictionary containing the requested media details.
+    
+    Example:
+        ```python
+        details = get_instagram_media_details(
+            media_id="17841400123456789",
+            fields=["caption", "media_type", "permalink", "like_count", 
+                     "comments_count", "thumbnail_url", "media_url"]
+        )
+        ```
+    """
+    default_fields = [
+        'id', 'caption', 'media_type', 'media_url', 'thumbnail_url',
+        'permalink', 'timestamp', 'like_count', 'comments_count',
+        'media_product_type', 'username'
+    ]
+    effective_fields = fields if fields is not None else default_fields
+    
+    return _fetch_node(node_id=media_id, fields=effective_fields)
+
+
 if __name__ == "__main__":
     _get_fb_access_token()
 
