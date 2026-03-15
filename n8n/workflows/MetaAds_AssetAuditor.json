@@ -1,0 +1,121 @@
+{
+  "name": "MetaAds_AssetAuditor",
+  "nodes": [
+    {
+      "id": "trig-asset",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "inputSource": "defineBelow",
+        "inputFields": {
+          "values": [
+            { "name": "act_id", "type": "string", "required": true },
+            { "name": "campaign_id", "type": "string", "required": false },
+            { "name": "date_preset", "type": "string", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "code-prep-asset",
+      "name": "Preparar params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst act_id = j.act_id || j.meta_ad_account_id || '';\nconst campaign_id = j.campaign_id || null;\nconst date_preset = j.date_preset || 'last_7d';\nif (!act_id || !act_id.startsWith('act_')) return [{ json: { error: 'act_id requerido' } }];\nreturn [{ json: { act_id, campaign_id, date_preset } }];"
+      }
+    },
+    {
+      "id": "http-insights-ad",
+      "name": "GET ad insights",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://metamcp.agencybts.com/api/graph",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ method: 'GET', path: $json.act_id + '/insights', params: { level: 'ad', date_preset: $json.date_preset, fields: 'ad_id,ad_name,spend,cpc,cpm,actions', limit: 50 } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "code-format-asset",
+      "name": "Ranking por CPA",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nif (j.error) return [{ json: { output: 'Error: ' + (j.error.message || JSON.stringify(j.error)) } }];\nconst data = Array.isArray(j.data) ? j.data : [];\nconst ranked = data.map(d => {\n  const cpc = parseFloat(d.cpc || 999) || 999;\n  const spend = parseFloat(d.spend || 0) || 0;\n  return { ad_id: d.ad_id, ad_name: d.ad_name, spend, cpc };\n}).sort((a,b) => a.cpc - b.cpc);\nreturn [{ json: { output: JSON.stringify({ best_performers: ranked.slice(0,10), total: ranked.length }, null, 2) } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Preparar params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar params": {
+      "main": [
+        [
+          {
+            "node": "GET ad insights",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET ad insights": {
+      "main": [
+        [
+          {
+            "node": "Ranking por CPA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

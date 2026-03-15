@@ -1,0 +1,187 @@
+{
+  "name": "MetaAds_PerformanceReport",
+  "nodes": [
+    {
+      "id": "trig-perf",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "inputSource": "defineBelow",
+        "inputFields": {
+          "values": [
+            { "name": "act_id", "type": "string", "required": true },
+            { "name": "date_preset", "type": "string", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "code-prep-perf",
+      "name": "Preparar params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst act_id = j.act_id || j.meta_ad_account_id || '';\nconst date_preset = j.date_preset || 'last_7d';\nif (!act_id || !act_id.startsWith('act_')) {\n  return [{ json: { error: 'act_id requerido (ej. act_123)' } }];\n}\nreturn [{ json: { act_id, date_preset } }];"
+      }
+    },
+    {
+      "id": "http-campaigns",
+      "name": "GET campañas activas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://metamcp.agencybts.com/api/graph",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ method: 'GET', path: $json.act_id + '/campaigns', params: { fields: 'id,name,status,effective_status', effective_status: ['ACTIVE'], limit: 100 } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "http-insights",
+      "name": "GET insights cuenta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://metamcp.agencybts.com/api/graph",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ method: 'GET', path: $('Preparar params').first().json.act_id + '/insights', params: { level: 'account', date_preset: $('Preparar params').first().json.date_preset, fields: 'spend,impressions,clicks,actions,action_values,cpc,cpm,cpp,cost_per_action_type' } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "code-merge-perf",
+      "name": "Formatear reporte",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const prep = $('Preparar params').first().json;\nconst campaignsItems = $('GET campañas activas').all();\nconst insightsItems = $('GET insights cuenta').all();\nlet campaigns = [];\nlet insights = null;\ntry {\n  const c0 = campaignsItems[0]?.json;\n  campaigns = Array.isArray(c0?.data) ? c0.data : [];\n  if (c0?.error) campaigns = [];\n} catch (_) { campaigns = []; }\ntry {\n  const i0 = insightsItems[0]?.json;\n  if (i0?.error) insights = null;\n  else insights = Array.isArray(i0?.data) ? i0.data[0] : i0;\n} catch (_) { insights = null; }\nconst spend = insights?.spend || '0';\nconst impr = insights?.impressions || 0;\nconst clic = insights?.clicks || 0;\nconst cpc = insights?.cpc || 'N/A';\nlet actions = insights?.actions || [];\nlet leads = 0;\nlet purchases = 0;\nfor (const a of actions) {\n  if (a.action_type === 'lead') leads = a.value;\n  if (a.action_type === 'purchase') purchases = a.value;\n}\nconst output = {\n  summary: { spend, impressions: impr, clicks: clic, cpc, leads, purchases, active_campaigns: campaigns.length },\n  campaigns: campaigns.map(c => ({ id: c.id, name: c.name, status: c.effective_status || c.status })),\n  raw_insights: insights\n};\nreturn [{ json: { output: JSON.stringify(output, null, 2) } }];"
+      }
+    },
+    {
+      "id": "merge-perf",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        550,
+        300
+      ],
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Preparar params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar params": {
+      "main": [
+        [
+          {
+            "node": "GET campañas activas",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "GET insights cuenta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET campañas activas": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET insights cuenta": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Formatear reporte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

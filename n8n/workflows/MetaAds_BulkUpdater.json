@@ -1,0 +1,120 @@
+{
+  "name": "MetaAds_BulkUpdater",
+  "nodes": [
+    {
+      "id": "trig-bulk",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "inputSource": "defineBelow",
+        "inputFields": {
+          "values": [
+            { "name": "ad_ids", "type": "string", "required": true },
+            { "name": "action", "type": "string", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "code-prep-bulk",
+      "name": "Preparar params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst action = j.action || 'pause';\nconst ad_ids = Array.isArray(j.ad_ids) ? j.ad_ids : (j.ad_ids ? String(j.ad_ids).split(',') : []);\nif (ad_ids.length === 0) return [{ json: { error: 'ad_ids requerido (array o string separado por comas)' } }];\nreturn ad_ids.map(id => ({ json: { ad_id: String(id).trim(), action } }));"
+      }
+    },
+    {
+      "id": "http-update-ad",
+      "name": "PATCH anuncio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://metamcp.agencybts.com/api/graph",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ method: 'POST', path: $json.ad_id, data: { _method: 'PATCH', status: $json.action === 'pause' ? 'PAUSED' : 'ACTIVE' } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "code-aggregate-bulk",
+      "name": "Resumir resultados",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const preps = $('Preparar params').all();\nconst results = $input.all();\nlet ok = 0;\nconst failedIds = [];\nfor (let i = 0; i < results.length; i++) {\n  const r = results[i].json;\n  if (r && r.error) failedIds.push(preps[i]?.json?.ad_id || ('item_' + i));\n  else ok++;\n}\nreturn [{ json: { output: JSON.stringify({ updated: ok, failed: failedIds.length, failed_ids: failedIds }, null, 2) } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Preparar params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar params": {
+      "main": [
+        [
+          {
+            "node": "PATCH anuncio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "PATCH anuncio": {
+      "main": [
+        [
+          {
+            "node": "Resumir resultados",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

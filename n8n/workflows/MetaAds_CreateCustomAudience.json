@@ -1,0 +1,122 @@
+{
+  "name": "MetaAds_CreateCustomAudience",
+  "nodes": [
+    {
+      "id": "trig-aud",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "inputSource": "defineBelow",
+        "inputFields": {
+          "values": [
+            { "name": "act_id", "type": "string", "required": true },
+            { "name": "name", "type": "string", "required": false },
+            { "name": "subtype", "type": "string", "required": false },
+            { "name": "rule", "type": "string", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "code-prep-aud",
+      "name": "Preparar params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst act_id = j.act_id || j.meta_ad_account_id || '';\nconst name = j.name || j.audience_name || 'Público personalizado';\nconst subtype = j.subtype || 'CUSTOM';\nconst rule = j.rule || null;\nif (!act_id || !act_id.startsWith('act_')) return [{ json: { error: 'act_id requerido' } }];\nreturn [{ json: { act_id, name, subtype, rule } }];"
+      }
+    },
+    {
+      "id": "http-create-aud",
+      "name": "POST crear público",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://metamcp.agencybts.com/api/graph",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ method: 'POST', path: $json.act_id + '/customaudiences', data: (() => { const r = $json.rule; const ruleVal = r == null ? undefined : (typeof r === 'string' ? r : JSON.stringify(r)); const d = { name: $json.name, subtype: $json.subtype }; if (ruleVal) d.rule = ruleVal; return d; })() }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "code-out-aud",
+      "name": "Formatear salida",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nif (j.error) return [{ json: { output: 'Error: ' + (j.error.message || JSON.stringify(j.error)) } }];\nreturn [{ json: { output: JSON.stringify({ id: j.id, name: j.name, success: true }, null, 2) } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Preparar params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar params": {
+      "main": [
+        [
+          {
+            "node": "POST crear público",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST crear público": {
+      "main": [
+        [
+          {
+            "node": "Formatear salida",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}

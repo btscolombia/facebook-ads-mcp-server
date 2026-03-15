@@ -1,0 +1,133 @@
+{
+  "name": "MetaAds_SubWF_AgenteDistribucion",
+  "nodes": [
+    {
+      "id": "trigger-ag",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 300],
+      "parameters": { "inputSource": "passthrough" }
+    },
+    {
+      "id": "code-prompt",
+      "name": "Construir prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nif (j.error) return [{ json: j }];\nconst g = (j.ganadores || []).map(x => x.ad_name + ' (CPL ' + (x.cpl?.toFixed?.(0) || x.cpl) + ')').join(', ');\nconst p = (j.perdedores || []).map(x => x.ad_name).join(', ');\nconst interp = (j.interpretacion_estrategica || '').trim();\nconst bloqueInterp = interp ? `\\nInterpretación estratégica (análisis previo): ${interp}\\n` : '';\nconst prompt = `Eres un analista de Meta Ads. Genera un reporte BREVE (máx 150 palabras).\n\nMétricas (${j.period}): Gasto ${j.metrics?.spend} | Impresiones ${j.metrics?.impressions} | CTR ${j.metrics?.ctr} | Leads ${j.metrics?.leads} | CPL ${j.metrics?.cpl || 'N/A'}\nEstrategia: ${j.strategy || 'No definida'}${bloqueInterp}\nGanadores (mantener): ${g || 'Ninguno'}\nPerdedores (revisar): ${p || 'Ninguno'}\n\nResponde en 3 partes:\n1. RESUMEN: ¿Vamos hacia el objetivo? (mejorando/estable/hay que optimizar)\n2. PROBLEMA (si hay): Una línea\n3. ACCIONES (1-3): Concretas y breves.\n\nSé directo.`;\nreturn [{ json: { ...j, prompt } }];"
+      }
+    },
+    {
+      "id": "gemini-model",
+      "name": "Google Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [440, 140],
+      "parameters": { "options": {} },
+      "credentials": { "googlePalmApi": { "id": "GaRHq8RH1sJb1f9h", "name": "Google Gemini BTS" } }
+    },
+    {
+      "id": "chain-llm",
+      "name": "Resumen IA (LLM Chain)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [440, 300],
+      "parameters": {
+        "batching": {},
+        "promptType": "define",
+        "text": "={{ $json.prompt }}"
+      }
+    },
+    {
+      "id": "code-combine",
+      "name": "Combinar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300],
+      "parameters": {
+        "jsCode": "const fmt = $('Construir prompt').first().json;\nconst chainOut = $input.first().json;\nif (fmt.error) return [{ json: fmt }];\nconst aiContent = chainOut?.response?.text ?? chainOut?.text ?? chainOut?.output ?? 'Sin resumen';\nreturn [{ json: { ...fmt, resumen_ia: aiContent } }];"
+      }
+    },
+    {
+      "id": "supabase-save",
+      "name": "Supabase - Guardar Reporte",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [880, 300],
+      "parameters": {
+        "operation": "create",
+        "tableId": "reportes_frecuentes",
+        "dataMode": "defineBelow",
+        "values": {
+          "values": [
+            { "name": "client_id", "value": "={{ $json.client_id }}" },
+            { "name": "period", "value": "={{ $json.period }}" },
+            { "name": "metrics", "value": "={{ typeof $json.metrics === 'object' ? JSON.stringify($json.metrics) : $json.metrics }}" },
+            { "name": "ganadores", "value": "={{ typeof $json.ganadores === 'object' ? JSON.stringify($json.ganadores) : $json.ganadores }}" },
+            { "name": "perdedores", "value": "={{ typeof $json.perdedores === 'object' ? JSON.stringify($json.perdedores) : $json.perdedores }}" },
+            { "name": "resumen_ia", "value": "={{ $json.resumen_ia }}" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "if-slack",
+      "name": "¿Enviar a Slack?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1100, 300],
+      "parameters": {
+        "conditions": {
+          "combinator": "and",
+          "conditions": [
+            {
+              "leftValue": "={{ $json.slack_channel_id }}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "isNotEmpty" }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "slack-send",
+      "name": "Slack - Enviar reporte",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [1320, 200],
+      "parameters": {
+        "resource": "message",
+        "operation": "post",
+        "select": "channel",
+        "channelId": { "__rl": true, "mode": "id", "value": "={{ $json.slack_channel_id }}" },
+        "text": "=*Reporte Meta Ads — {{ $json.client_name }}*\n\n{{ $json.resumen_ia }}\n\n---\nGasto {{ $json.metrics.spend }} | Leads {{ $json.metrics.leads }} | CPL {{ $json.metrics.cpl || 'N/A' }}"
+      }
+    },
+    {
+      "id": "noop",
+      "name": "Sin Slack",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [1320, 400],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": { "main": [[{ "node": "Construir prompt", "type": "main", "index": 0 }]] },
+    "Construir prompt": { "main": [[{ "node": "Resumen IA (LLM Chain)", "type": "main", "index": 0 }]] },
+    "Google Gemini Chat Model": { "ai_languageModel": [[{ "node": "Resumen IA (LLM Chain)", "type": "ai_languageModel", "index": 0 }]] },
+    "Resumen IA (LLM Chain)": { "main": [[{ "node": "Combinar", "type": "main", "index": 0 }]] },
+    "Combinar": { "main": [[{ "node": "Supabase - Guardar Reporte", "type": "main", "index": 0 }]] },
+    "Supabase - Guardar Reporte": { "main": [[{ "node": "¿Enviar a Slack?", "type": "main", "index": 0 }]] },
+    "¿Enviar a Slack?": {
+      "main": [
+        [{ "node": "Slack - Enviar reporte", "type": "main", "index": 0 }],
+        [{ "node": "Sin Slack", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": { "templateCredsSetupCompleted": false }
+}

@@ -1,0 +1,71 @@
+{
+  "name": "MetaAds_SubWF_Extraccion",
+  "nodes": [
+    {
+      "id": "trigger-ext",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 300],
+      "parameters": { "inputSource": "passthrough" }
+    },
+    {
+      "id": "http-acc",
+      "name": "GET insights cuenta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 200],
+      "parameters": {
+        "method": "POST",
+        "url": "https://metamcp.agencybts.com/api/graph",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ method: 'GET', path: $json.act_id + '/insights', params: { level: 'account', date_preset: $json.date_preset || 'last_7d', fields: 'spend,impressions,clicks,ctr,actions,cpc,cpm,cost_per_action_type', limit: 1 } }) }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] }
+      }
+    },
+    {
+      "id": "http-ads",
+      "name": "GET insights por anuncio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [220, 400],
+      "parameters": {
+        "method": "POST",
+        "url": "https://metamcp.agencybts.com/api/graph",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ method: 'GET', path: $json.act_id + '/insights', params: { level: 'ad', date_preset: $json.date_preset || 'last_7d', fields: 'ad_id,ad_name,spend,impressions,clicks,ctr,cpc,cpm,actions', limit: 50 } }) }}",
+        "sendHeaders": true,
+        "headerParameters": { "parameters": [{ "name": "Content-Type", "value": "application/json" }] }
+      }
+    },
+    {
+      "id": "merge-ext",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [440, 300],
+      "parameters": { "mode": "append" }
+    },
+    {
+      "id": "code-out-ext",
+      "name": "Formatear salida",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [660, 300],
+      "parameters": {
+        "jsCode": "const trigger = $('Execute Workflow Trigger').first().json;\nconst items = $input.all();\nlet insightsAcc = null;\nlet insightsAds = [];\nfor (const it of items) {\n  const j = it.json;\n  const data = Array.isArray(j.data) ? j.data : [];\n  if (data.length >= 1) {\n    if (data[0].ad_id) insightsAds = data;\n    else insightsAcc = data[0];\n  }\n}\nreturn [{ json: { ...trigger, insightsAccount: insightsAcc, insightsAds } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": { "main": [[{ "node": "GET insights cuenta", "type": "main", "index": 0 }, { "node": "GET insights por anuncio", "type": "main", "index": 0 }]] },
+    "GET insights cuenta": { "main": [[{ "node": "Merge", "type": "main", "index": 0 }]] },
+    "GET insights por anuncio": { "main": [[{ "node": "Merge", "type": "main", "index": 0 }]] },
+    "Merge": { "main": [[{ "node": "Formatear salida", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": { "templateCredsSetupCompleted": false }
+}

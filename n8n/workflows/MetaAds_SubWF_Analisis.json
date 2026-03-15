@@ -1,0 +1,73 @@
+{
+  "name": "MetaAds_SubWF_Analisis",
+  "nodes": [
+    {
+      "id": "trigger-ana",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 300],
+      "parameters": { "inputSource": "passthrough" }
+    },
+    {
+      "id": "code-analisis",
+      "name": "Ganadores y perdedores",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [220, 300],
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nif (j.error) return [{ json: j }];\nconst insightsAcc = j.insightsAccount;\nconst insightsAd = j.insightsAds || [];\nconst spend = parseFloat(insightsAcc?.spend || 0) || 0;\nconst impr = parseInt(insightsAcc?.impressions || 0, 10) || 0;\nconst clicks = parseInt(insightsAcc?.clicks || 0, 10) || 0;\nconst ctr = insightsAcc?.ctr || '0';\nlet leads = 0;\nconst actions = insightsAcc?.actions || [];\nfor (const a of actions) {\n  if (a.action_type === 'lead') { leads = parseInt(a.value || 0, 10) || 0; break; }\n}\nconst cpl = leads > 0 ? (spend / leads).toFixed(0) : null;\nconst rows = insightsAd.map(d => {\n  const s = parseFloat(d.spend || 0) || 0;\n  let l = 0;\n  for (const a of (d.actions || [])) {\n    if (a.action_type === 'lead') { l = parseInt(a.value || 0, 10) || 0; break; }\n  }\n  const cplAd = l > 0 ? s / l : 999999;\n  return { ad_id: d.ad_id, ad_name: (d.ad_name || '').slice(0, 50), spend: s, leads: l, cpl: cplAd };\n});\nrows.sort((a, b) => a.cpl - b.cpl);\nconst ganadores = rows.filter(r => r.leads > 0).slice(0, 5);\nlet perdedores = rows.filter(r => r.spend > 0 && r.leads === 0).slice(0, 3);\nif (rows.length && perdedores.length === 0) perdedores = rows.filter(r => r.leads > 0).slice(-2);\nconst period = j.date_preset || 'last_7d';\nreturn [{ json: { ...j, metrics: { spend, impressions: impr, clicks, ctr, leads, cpl }, ganadores, perdedores, period } }];"
+      }
+    },
+    {
+      "id": "code-prompt-interp",
+      "name": "Preparar prompt interpretación",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nif (j.error) return [{ json: j }];\nconst g = (j.ganadores || []).map(x => x.ad_name + ' (CPL ' + (x.cpl?.toFixed?.(0) || x.cpl) + ')').join(', ');\nconst p = (j.perdedores || []).map(x => x.ad_name).join(', ');\nconst hist = (j.historial_reportes || []);\nconst textoHist = hist.length ? hist.slice(0, 5).map((r, i) => `Reporte ${i+1} (${r.period || 'N/A'}): ${(r.resumen_ia || '').slice(0, 200)}${(r.resumen_ia || '').length > 200 ? '...' : ''}`).join('\\n') : 'Sin reportes anteriores.';\nconst prompt = `Eres un analista de Meta Ads. Usa el contexto de estrategia y el historial de reportes para dar una interpretación útil.\n\nCONTEXTO DE ESTRATEGIA (último snapshot):\n${j.strategy || 'No definida'}\n\nHISTORIAL DE REPORTES RECIENTES (qué se ha analizado antes):\n${textoHist}\n\nMÉTRICAS ACTUALES (${j.period}): Gasto ${j.metrics?.spend} | Leads ${j.metrics?.leads} | CPL ${j.metrics?.cpl || 'N/A'}.\nGanadores (mantener): ${g || 'Ninguno'}.\nPerdedores (revisar): ${p || 'Ninguno'}.\n\nEn 2-4 frases: ¿Los resultados van alineados con la estrategia? ¿Mejora o empeora respecto a lo visto antes? ¿Qué riesgo ves y una recomendación prioritaria? Sé directo.`;\nreturn [{ json: { ...j, prompt_interpretacion: prompt } }];"
+      }
+    },
+    {
+      "id": "gemini-ana",
+      "name": "Google Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [660, 180],
+      "parameters": { "options": {} },
+      "credentials": { "googlePalmApi": { "id": "GaRHq8RH1sJb1f9h", "name": "Google Gemini BTS" } }
+    },
+    {
+      "id": "chain-interp",
+      "name": "Interpretación estratégica (LLM Chain)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.7,
+      "position": [660, 300],
+      "parameters": {
+        "batching": {},
+        "promptType": "define",
+        "text": "={{ $json.prompt_interpretacion }}"
+      }
+    },
+    {
+      "id": "code-merge-interp",
+      "name": "Añadir interpretación",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300],
+      "parameters": {
+        "jsCode": "const base = $('Ganadores y perdedores').first().json;\nconst out = $input.first().json;\nif (base.error) return [{ json: base }];\nconst text = out?.response?.text ?? out?.text ?? out?.output ?? '';\nreturn [{ json: { ...base, interpretacion_estrategica: text } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": { "main": [[{ "node": "Ganadores y perdedores", "type": "main", "index": 0 }]] },
+    "Ganadores y perdedores": { "main": [[{ "node": "Preparar prompt interpretación", "type": "main", "index": 0 }]] },
+    "Preparar prompt interpretación": { "main": [[{ "node": "Interpretación estratégica (LLM Chain)", "type": "main", "index": 0 }]] },
+    "Google Gemini Chat Model": { "ai_languageModel": [[{ "node": "Interpretación estratégica (LLM Chain)", "type": "ai_languageModel", "index": 0 }]] },
+    "Interpretación estratégica (LLM Chain)": { "main": [[{ "node": "Añadir interpretación", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": { "templateCredsSetupCompleted": false }
+}

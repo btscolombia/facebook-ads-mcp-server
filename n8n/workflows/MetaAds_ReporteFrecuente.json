@@ -1,0 +1,437 @@
+{
+  "name": "MetaAds_ReporteFrecuente",
+  "nodes": [
+    {
+      "id": "trig-manual",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "code-prep",
+      "name": "Preparar input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "// Input: act_id (requerido), slack_channel_id (opcional), client_name (opcional), date_preset (opcional)\nconst items = $input.all();\nconst out = [];\nfor (const item of items) {\n  const j = item.json;\n  const act_id = (j.act_id || j.meta_ad_account_id || '').toString().trim();\n  const date_preset = j.date_preset || 'last_7d';\n  const client_name = j.client_name || j.name || 'Cliente';\n  const slack_channel_id = j.slack_channel_id || null;\n  const strategy = j.strategy || j.product_angle || '';\n  const client_id = j.client_id || 'c557c9d1-8f1a-4d91-9fe0-95e8ac298e64';\n  if (!act_id || !act_id.startsWith('act_')) {\n    out.push({ json: { error: 'act_id requerido (ej. act_123456789)', act_id } });\n    continue;\n  }\n  out.push({ json: { act_id, date_preset, client_name, slack_channel_id, strategy, client_id } });\n}\nreturn out.length ? out : [{ json: { error: 'Sin items de entrada' } }];"
+      }
+    },
+    {
+      "id": "http-insights-acc",
+      "name": "GET insights cuenta",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://metamcp.agencybts.com/api/graph",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ method: 'GET', path: $json.act_id + '/insights', params: { level: 'account', date_preset: $json.date_preset, fields: 'spend,impressions,clicks,ctr,actions,cpc,cpm,cost_per_action_type', limit: 1 } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "http-insights-ad",
+      "name": "GET insights por anuncio",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        400
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://metamcp.agencybts.com/api/graph",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ method: 'GET', path: $json.act_id + '/insights', params: { level: 'ad', date_preset: $json.date_preset, fields: 'ad_id,ad_name,spend,impressions,clicks,ctr,cpc,cpm,actions', limit: 50 } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "merge-data",
+      "name": "Merge",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "mode": "append"
+      }
+    },
+    {
+      "id": "code-format",
+      "name": "Ganadores y perdedores",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const prep = $('Preparar input').first().json;\nif (prep.error) return [{ json: prep }];\nconst allItems = $input.all();\nlet insightsAcc = null;\nlet insightsAd = [];\nfor (const it of allItems) {\n  const j = it.json;\n  if (j.error) return [{ json: { ...prep, error: j.error?.message || JSON.stringify(j.error) } }];\n  const data = Array.isArray(j.data) ? j.data : [];\n  if (data.length >= 1) {\n    if (data[0].ad_id) insightsAd = data;\n    else insightsAcc = data[0];\n  }\n}\nconst spend = parseFloat(insightsAcc?.spend || 0) || 0;\nconst impr = parseInt(insightsAcc?.impressions || 0, 10) || 0;\nconst clicks = parseInt(insightsAcc?.clicks || 0, 10) || 0;\nconst ctr = insightsAcc?.ctr || '0';\nlet leads = 0;\nconst actions = insightsAcc?.actions || [];\nfor (const a of actions) {\n  if (a.action_type === 'lead') { leads = parseInt(a.value || 0, 10) || 0; break; }\n}\nconst cpl = leads > 0 ? (spend / leads).toFixed(0) : null;\nconst rows = insightsAd.map(d => {\n  const s = parseFloat(d.spend || 0) || 0;\n  let l = 0;\n  for (const a of (d.actions || [])) {\n    if (a.action_type === 'lead') { l = parseInt(a.value || 0, 10) || 0; break; }\n  }\n  const cplAd = l > 0 ? s / l : 999999;\n  return { ad_id: d.ad_id, ad_name: (d.ad_name || '').slice(0, 50), spend: s, leads: l, cpl: cplAd };\n});\nrows.sort((a, b) => a.cpl - b.cpl);\nconst ganadores = rows.filter(r => r.leads > 0).slice(0, 5);\nconst perdedores = rows.filter(r => r.spend > 0 && r.leads === 0).slice(0, 3);\nif (rows.length && perdedores.length === 0) perdedores.push(...rows.filter(r => r.leads > 0).slice(-2));\nreturn [{ json: {\n  ...prep,\n  metrics: { spend, impressions: impr, clicks, ctr, leads, cpl },\n  ganadores,\n  perdedores,\n  period: prep.date_preset\n} }];"
+      }
+    },
+    {
+      "id": "code-prompt",
+      "name": "Construir prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nif (j.error) return [{ json: j }];\nconst g = (j.ganadores || []).map(x => x.ad_name + ' (CPL ' + (x.cpl?.toFixed?.(0) || x.cpl) + ')').join(', ');\nconst p = (j.perdedores || []).map(x => x.ad_name).join(', ');\nconst prompt = `Eres un analista de Meta Ads. Genera un reporte BREVE (máx 150 palabras).\n\nMétricas (${j.period}): Gasto ${j.metrics?.spend} | Impresiones ${j.metrics?.impressions} | CTR ${j.metrics?.ctr} | Leads ${j.metrics?.leads} | CPL ${j.metrics?.cpl || 'N/A'}\nEstrategia: ${j.strategy || 'No definida'}\nGanadores (mantener): ${g || 'Ninguno'}\nPerdedores (revisar): ${p || 'Ninguno'}\n\nResponde en 3 partes:\n1. RESUMEN: ¿Vamos hacia el objetivo? (mejorando/estable/hay que optimizar)\n2. PROBLEMA (si hay): Una línea\n3. ACCIONES (1-3): Concretas y breves.\n\nSé directo.`;\nreturn [{ json: { ...j, prompt } }];"
+      }
+    },
+    {
+      "id": "openai-summary",
+      "name": "Resumen IA",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1320,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: 'gpt-4o-mini', messages: [{ role: 'user', content: $json.prompt }], temperature: 0.3, max_tokens: 400 }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth"
+      }
+    },
+    {
+      "id": "code-combine",
+      "name": "Combinar para Slack",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const fmt = $('Ganadores y perdedores').first().json;\nconst req = $input.first().json;\nif (fmt.error) return [{ json: fmt }];\nconst aiContent = req.choices?.[0]?.message?.content || req.error?.message || 'Sin resumen';\nreturn [{ json: { ...fmt, resumen_ia: aiContent } }];"
+      }
+    },
+    {
+      "id": "if-slack",
+      "name": "¿Enviar a Slack?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1980,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-slack",
+              "leftValue": "={{ $json.slack_channel_id || '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "isNotEmpty"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "slack-send",
+      "name": "Slack - Enviar reporte",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.2,
+      "position": [
+        2200,
+        200
+      ],
+      "parameters": {
+        "channelId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "={{ $json.slack_channel_id }}"
+        },
+        "text": "=*📊 Reporte Meta Ads — {{ $json.client_name }}*\n\n{{ $json.resumen_ia }}\n\n---\n_Gasto {{ $json.metrics.spend }} | Leads {{ $json.metrics.leads }} | CPL {{ $json.metrics.cpl || 'N/A' }}_"
+      },
+      "credentials": {
+        "slackApi": {
+          "id": "slack-meta-ads",
+          "name": "Slack Meta Ads IA"
+        }
+      }
+    },
+    {
+      "id": "code-output",
+      "name": "Salida (sin Slack)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        400
+      ],
+      "parameters": {
+        "jsCode": "const d = $input.first().json;\nreturn [{ json: { client_name: d.client_name, client_id: d.client_id, metrics: d.metrics, ganadores: d.ganadores, perdedores: d.perdedores, resumen_ia: d.resumen_ia, slack_channel_id: d.slack_channel_id || null } }];"
+      }
+    },
+    {
+      "id": "supabase-save",
+      "name": "Supabase - Guardar Reporte",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        300
+      ],
+      "parameters": {
+        "operation": "insert",
+        "table": "reportes_frecuentes",
+        "dataMode": "defineBelow",
+        "values": {
+          "values": [
+            {
+              "name": "client_id",
+              "value": "={{ $json.client_id }}"
+            },
+            {
+              "name": "period",
+              "value": "={{ $json.period }}"
+            },
+            {
+              "name": "metrics",
+              "value": "={{ JSON.stringify($json.metrics) }}"
+            },
+            {
+              "name": "ganadores",
+              "value": "={{ JSON.stringify($json.ganadores) }}"
+            },
+            {
+              "name": "perdedores",
+              "value": "={{ JSON.stringify($json.perdedores) }}"
+            },
+            {
+              "name": "resumen_ia",
+              "value": "={{ $json.resumen_ia }}"
+            }
+          ]
+        }
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "",
+          "name": "Supabase account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Preparar input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar input": {
+      "main": [
+        [
+          {
+            "node": "GET insights cuenta",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "GET insights por anuncio",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET insights cuenta": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET insights por anuncio": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
+        [
+          {
+            "node": "Ganadores y perdedores",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ganadores y perdedores": {
+      "main": [
+        [
+          {
+            "node": "Construir prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Construir prompt": {
+      "main": [
+        [
+          {
+            "node": "Resumen IA",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Resumen IA": {
+      "main": [
+        [
+          {
+            "node": "Combinar para Slack",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Combinar para Slack": {
+      "main": [
+        [
+          {
+            "node": "Supabase - Guardar Reporte",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "¿Enviar a Slack?": {
+      "main": [
+        [
+          {
+            "node": "Slack - Enviar reporte",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Salida (sin Slack)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Supabase - Guardar Reporte": {
+      "main": [
+        [
+          {
+            "node": "¿Enviar a Slack?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {
+    "Manual Trigger": {
+      "item": [
+        {
+          "json": {
+            "act_id": "act_215272717429201",
+            "client_name": "Adib Fren Dental",
+            "slack_channel_id": "",
+            "date_preset": "last_7d",
+            "client_id": "c557c9d1-8f1a-4d91-9fe0-95e8ac298e64"
+          }
+        }
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner"
+  },
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

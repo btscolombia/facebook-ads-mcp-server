@@ -1,0 +1,419 @@
+{
+  "name": "Meta Ads Chat Webhook",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "meta-ads-chat",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": false,
+          "binaryProperty": "image"
+        }
+      },
+      "id": "webhook-meta-ads-chat",
+      "name": "Webhook Meta Ads Chat",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "webhookId": "meta-ads-chat",
+      "position": [120, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normaliza entrada: JSON o multipart/form-data\nconst input = $input.first();\nlet raw = input.json?.body ?? input.json ?? {};\nif (typeof raw === 'string') { try { raw = JSON.parse(raw); } catch (e) { raw = {}; } }\nconst body = raw && typeof raw === 'object' ? raw : {};\nconst j = input.json || {};\nconst binary = input.binary || {};\n\nlet message = body.message ?? j.message ?? '';\nlet client_name = body.client_name ?? body.clientName ?? j.client_name ?? j.clientName ?? '';\nlet conversation_id = body.conversation_id ?? body.conversationId ?? j.conversation_id ?? j.conversationId ?? null;\nlet actIdVal = body.act_id ?? body.meta_ad_account_id ?? j.act_id ?? j.meta_ad_account_id ?? j.query?.act_id ?? null;\nif (actIdVal && !String(actIdVal).startsWith('act_')) actIdVal = null;\nlet attachedImageBase64 = null;\nlet hasVideo = false;\n\nif (binary.image) {\n  try {\n    const buffer = await this.helpers.getBinaryDataBuffer(0, 'image');\n    attachedImageBase64 = buffer.toString('base64');\n  } catch (e) {\n    message += ' [Error leyendo imagen adjunta: ' + e.message + ']';\n  }\n}\nif (binary.video) hasVideo = true;\n\nlet contextAdd = '';\nif (attachedImageBase64) contextAdd += ' [Usuario adjuntó imagen (base64 listo). Usar tool upload_ad_image con act_id y image_base64 antes de crear campaña.]';\nif (hasVideo) contextAdd += ' [Usuario adjuntó vídeo. Para vídeos usar URL pública o upload_ad_image_from_url.]';\n\nreturn {\n  json: { message: message + contextAdd, client_name: String(client_name || '').trim(), conversation_id, attached_image_base64: attachedImageBase64, attached_video: hasVideo, act_id: actIdVal },\n  binary: input.binary || {}\n};"
+      },
+      "id": "code-normalize-input",
+      "name": "Normalizar input (JSON o multipart)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [340, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst conversation_id = input.conversation_id || `meta-ads-${Date.now()}`;\nreturn { json: { ...input, conversation_id } };"
+      },
+      "id": "code-asegurar-conv",
+      "name": "Asegurar conversation_id",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [560, 380]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [{
+            "id": "cond-act-id",
+            "leftValue": "={{ $json.act_id }}",
+            "rightValue": "",
+            "operator": { "type": "string", "operation": "notEmpty" }
+          }],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-act-id-body",
+      "name": "IF act_id en body",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [680, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $input.first().json;\nreturn { json: { ...prev, page_id: prev.page_id || null, client_name: prev.client_name || 'Cuenta de prueba' } };"
+      },
+      "id": "code-pasar-act-id",
+      "name": "Pasar act_id directo",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [900, 280]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "=meta_ads_chat:client:{{ $json.conversation_id }}",
+        "propertyName": "value",
+        "keyType": "string"
+      },
+      "id": "redis-get-cliente-conv",
+      "name": "Redis GET cliente conv",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [780, 380],
+      "credentials": {
+        "redis": {
+          "name": "Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-cache-value",
+              "leftValue": "={{ $json.value }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            },
+            {
+              "id": "cond-client-empty",
+              "leftValue": "={{ $('Asegurar conversation_id').item.json.client_name }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if-usar-cache-cliente",
+      "name": "IF usar cache cliente",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1000, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "const item = $input.first();\nconst redisValue = item.json.value || item.json;\nif (!redisValue) return [];\nconst client = typeof redisValue === 'string' ? JSON.parse(redisValue) : redisValue;\nconst prev = $('Asegurar conversation_id').first().json;\nreturn {\n  json: {\n    ...prev,\n    client_name: client.name,\n    act_id: client.meta_ad_account_id,\n    page_id: client.meta_page_id,\n    from_cache: true\n  }\n};"
+      },
+      "id": "code-formatear-cliente-redis",
+      "name": "Formatear cliente desde Redis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1220, 280]
+    },
+    {
+      "parameters": {
+        "operation": "get",
+        "key": "meta_ads_clients:list",
+        "propertyName": "value",
+        "keyType": "string"
+      },
+      "id": "redis-get-lista",
+      "name": "Redis GET lista clientes",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [1220, 480],
+      "credentials": {
+        "redis": {
+          "name": "Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-lista",
+              "leftValue": "={{ $json.value }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "if-lista-en-cache",
+      "name": "IF lista en cache",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1440, 480]
+    },
+    {
+      "parameters": {
+        "authentication": "nocoDbApiToken",
+        "resource": "row",
+        "operation": "getAll",
+        "projectId": {
+          "__rl": true,
+          "value": "prbbq33o0rpxekh",
+          "mode": "id"
+        },
+        "table": {
+          "__rl": true,
+          "value": "mrvubmbqegtfcz2",
+          "mode": "id"
+        },
+        "returnAll": false,
+        "limit": 50
+      },
+      "id": "nocodb-get-clients",
+      "name": "Get Clients NocoDB",
+      "type": "n8n-nodes-base.nocoDb",
+      "typeVersion": 3,
+      "position": [1660, 580],
+      "credentials": {
+        "nocoDbApiToken": {
+          "id": "T0b6Yz6dlN0m8E75",
+          "name": "NocoDB Agency BTS"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = $input.all().map(i => i.json);\nconst listJson = JSON.stringify(items);\nreturn { json: { listJson, _clients: items } };"
+      },
+      "id": "code-preparar-lista",
+      "name": "Preparar lista para Redis",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1880, 580]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "meta_ads_clients:list",
+        "value": "={{ $json.listJson }}",
+        "keyType": "string",
+        "expire": true,
+        "ttl": 900
+      },
+      "id": "redis-set-lista",
+      "name": "Redis SET lista clientes",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [2100, 580],
+      "credentials": {
+        "redis": {
+          "name": "Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $('Asegurar conversation_id').first().json;\nconst clients = $input.first().json._clients || JSON.parse($input.first().json.listJson || '[]');\nconst clientName = (prev.client_name || '').trim().toLowerCase();\nconst msg = (prev.message || '').toLowerCase();\nlet match = clients.find(c => {\n  const n = (c.name || '').toLowerCase();\n  return n && (n.includes(clientName) || clientName.includes(n) || msg.includes(n.split(' ')[0]));\n});\nif (!match && msg) {\n  for (const c of clients) {\n    const first = (c.name || '').split(' ')[0]?.toLowerCase();\n    if (first && msg.includes(first)) { match = c; break; }\n  }\n}\nif (!match) {\n  return { json: { ...prev, act_id: null, page_id: null, error: 'Cliente no encontrado' } };\n}\nreturn {\n  json: {\n    ...prev,\n    client_name: match.name,\n    act_id: match.meta_ad_account_id,\n    page_id: match.meta_page_id,\n    from_cache: false\n  }\n};"
+      },
+      "id": "code-filtrar-desde-nocodb",
+      "name": "Filtrar cliente desde NocoDB",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2320, 580]
+    },
+    {
+      "parameters": {
+        "jsCode": "const prev = $('Asegurar conversation_id').first().json;\nconst raw = $input.first().json.value;\nlet clients = [];\ntry {\n  clients = typeof raw === 'string' ? (JSON.parse(raw || '[]') || []) : (Array.isArray(raw) ? raw : []);\n} catch (e) {\n  clients = [];\n}\nif (!Array.isArray(clients)) clients = [];\nconst clientName = (prev.client_name || '').trim().toLowerCase();\nconst msg = (prev.message || '').toLowerCase();\nlet match = clients.find(c => {\n  const n = (c.name || '').toLowerCase();\n  return n && (n.includes(clientName) || clientName.includes(n) || msg.includes((n.split(' ')[0] || '')));\n});\nif (!match && msg) {\n  for (const c of clients) {\n    const first = (c.name || '').split(' ')[0]?.toLowerCase();\n    if (first && msg.includes(first)) { match = c; break; }\n  }\n}\nif (!match) {\n  return { json: { ...prev, act_id: null, page_id: null, error: 'Cliente no encontrado' } };\n}\nreturn {\n  json: {\n    ...prev,\n    client_name: match.name,\n    act_id: match.meta_ad_account_id,\n    page_id: match.meta_page_id,\n    from_cache: false\n  }\n};"
+      },
+      "id": "code-filtrar-desde-cache",
+      "name": "Filtrar cliente desde cache",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1660, 380]
+    },
+    {
+      "parameters": {
+        "operation": "set",
+        "key": "=meta_ads_chat:client:{{ $json.conversation_id }}",
+        "value": "={{ JSON.stringify({ name: $json.client_name, meta_ad_account_id: $json.act_id, meta_page_id: $json.page_id }) }}",
+        "keyType": "string",
+        "expire": true,
+        "ttl": 86400
+      },
+      "id": "redis-set-cliente-conv",
+      "name": "Redis SET cliente conv",
+      "type": "n8n-nodes-base.redis",
+      "typeVersion": 1,
+      "position": [2540, 480],
+      "credentials": {
+        "redis": {
+          "name": "Redis"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      },
+      "id": "merge-context",
+      "name": "Merge contexto",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [2760, 380]
+    },
+    {
+      "parameters": {
+        "jsCode": "const it = $input.first().json;\nconst aid = it.act_id && String(it.act_id).startsWith('act_') ? it.act_id : null;\nlet msg = it.message || '';\nif (aid) msg = '[Contexto: act_id=' + aid + ', client_name=' + (it.client_name || '') + '] ' + msg;\nreturn { json: { ...it, message: msg, act_id: aid } };"
+      },
+      "id": "code-inyectar-act-id",
+      "name": "Inyectar act_id en contexto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2870, 380]
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": {
+          "__rl": true,
+          "value": "rq1lDoj6pX1Tp0Ln",
+          "mode": "id"
+        },
+        "options": {}
+      },
+      "id": "execute-workflow-ai",
+      "name": "Call Meta Ads AI Agent",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.1,
+      "position": [3180, 580]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { output: $json.output !== undefined ? $json.output : ($json.message || JSON.stringify($json)), conversation_id: $json.conversation_id || $('Inyectar act_id en contexto').first().json.conversation_id, _debug_act_id: $('Inyectar act_id en contexto').first().json.act_id, execution_id: ($execution && $execution.id) ? $execution.id : null, workflow_id: ($workflow && $workflow.id) ? $workflow.id : null } }}"
+      },
+      "id": "respond-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [3200, 380]
+    },
+    {
+      "parameters": {
+        "content": "## Redis + NocoDB\n\n- Cache cliente por conversación (24h)\n- Cache lista clientes (15 min)\n- Asigna credencial Redis y NocoDB",
+        "height": 140,
+        "width": 320
+      },
+      "id": "sticky-redis",
+      "name": "Sticky Note Redis",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [760, 180]
+    }
+  ],
+  "connections": {
+    "Webhook Meta Ads Chat": {
+      "main": [[{ "node": "Normalizar input (JSON o multipart)", "type": "main", "index": 0 }]]
+    },
+    "Normalizar input (JSON o multipart)": {
+      "main": [[{ "node": "Asegurar conversation_id", "type": "main", "index": 0 }]]
+    },
+    "Asegurar conversation_id": {
+      "main": [[{ "node": "IF act_id en body", "type": "main", "index": 0 }]]
+    },
+    "IF act_id en body": {
+      "main": [
+        [{ "node": "Pasar act_id directo", "type": "main", "index": 0 }],
+        [{ "node": "Redis GET cliente conv", "type": "main", "index": 0 }]
+      ]
+    },
+    "Pasar act_id directo": {
+      "main": [[{ "node": "Merge contexto", "type": "main", "index": 0 }]]
+    },
+    "Redis GET cliente conv": {
+      "main": [[{ "node": "IF usar cache cliente", "type": "main", "index": 0 }]]
+    },
+    "IF usar cache cliente": {
+      "main": [
+        [{ "node": "Formatear cliente desde Redis", "type": "main", "index": 0 }],
+        [{ "node": "Redis GET lista clientes", "type": "main", "index": 0 }]
+      ]
+    },
+    "Formatear cliente desde Redis": {
+      "main": [[{ "node": "Merge contexto", "type": "main", "index": 0 }]]
+    },
+    "Redis GET lista clientes": {
+      "main": [[{ "node": "IF lista en cache", "type": "main", "index": 0 }]]
+    },
+    "IF lista en cache": {
+      "main": [
+        [{ "node": "Filtrar cliente desde cache", "type": "main", "index": 0 }],
+        [{ "node": "Get Clients NocoDB", "type": "main", "index": 0 }]
+      ]
+    },
+    "Get Clients NocoDB": {
+      "main": [[{ "node": "Preparar lista para Redis", "type": "main", "index": 0 }]]
+    },
+    "Preparar lista para Redis": {
+      "main": [
+        [{ "node": "Redis SET lista clientes", "type": "main", "index": 0 }],
+        [{ "node": "Filtrar cliente desde NocoDB", "type": "main", "index": 0 }]
+      ]
+    },
+    "Redis SET lista clientes": {},
+    "Filtrar cliente desde cache": {
+      "main": [[{ "node": "Redis SET cliente conv", "type": "main", "index": 0 }]]
+    },
+    "Filtrar cliente desde NocoDB": {
+      "main": [[{ "node": "Redis SET cliente conv", "type": "main", "index": 0 }]]
+    },
+    "Redis SET cliente conv": {
+      "main": [[{ "node": "Merge contexto", "type": "main", "index": 1 }]]
+    },
+    "Merge contexto": {
+      "main": [[{ "node": "Inyectar act_id en contexto", "type": "main", "index": 0 }]]
+    },
+    "Inyectar act_id en contexto": {
+      "main": [[{ "node": "Call Meta Ads AI Agent", "type": "main", "index": 0 }]]
+    },
+    "Call Meta Ads AI Agent": {
+      "main": [[{ "node": "Respond to Webhook", "type": "main", "index": 0 }]]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "pinData": {}
+}

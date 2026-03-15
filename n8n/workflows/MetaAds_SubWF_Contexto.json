@@ -1,0 +1,75 @@
+{
+  "name": "MetaAds_SubWF_Contexto",
+  "nodes": [
+    {
+      "id": "trigger-ctx",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [0, 300],
+      "parameters": { "inputSource": "passthrough" }
+    },
+    {
+      "id": "supabase-strategy",
+      "name": "Supabase - Última estrategia",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [220, 300],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "campaign_strategy_snapshots",
+        "returnAll": false,
+        "limit": 1,
+        "options": {
+          "sort": { "fields": [{ "fieldName": "created_at", "order": "desc" }] },
+          "filter": { "conditions": [{ "key": "client_id", "condition": "equals", "value": "={{ $json.client_id }}" }] }
+        }
+      }
+    },
+    {
+      "id": "code-merge-strategy",
+      "name": "Merge strategy",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [440, 300],
+      "parameters": {
+        "jsCode": "const input = $('Execute Workflow Trigger').first().json;\nconst rows = $input.all().map(i => i.json);\nconst snap = Array.isArray(rows) && rows.length ? rows[0] : null;\nconst strategy = snap?.notes || (snap?.snapshot ? JSON.stringify(snap.snapshot) : '') || '';\nreturn [{ json: { ...input, strategy } }];"
+      }
+    },
+    {
+      "id": "supabase-reportes",
+      "name": "Supabase - Últimos reportes",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [660, 300],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "reportes_frecuentes",
+        "returnAll": false,
+        "limit": 5,
+        "options": {
+          "sort": { "fields": [{ "fieldName": "created_at", "order": "desc" }] },
+          "filter": { "conditions": [{ "key": "client_id", "condition": "equals", "value": "={{ $json.client_id }}" }] }
+        }
+      }
+    },
+    {
+      "id": "code-merge-ctx",
+      "name": "Merge contexto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [880, 300],
+      "parameters": {
+        "jsCode": "const parent = $('Merge strategy').first().json;\nconst reportes = $input.all().map(i => i.json);\nreturn [{ json: { ...parent, historial_reportes: reportes } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": { "main": [[{ "node": "Supabase - Última estrategia", "type": "main", "index": 0 }]] },
+    "Supabase - Última estrategia": { "main": [[{ "node": "Merge strategy", "type": "main", "index": 0 }]] },
+    "Merge strategy": { "main": [[{ "node": "Supabase - Últimos reportes", "type": "main", "index": 0 }]] },
+    "Supabase - Últimos reportes": { "main": [[{ "node": "Merge contexto", "type": "main", "index": 0 }]] }
+  },
+  "settings": { "executionOrder": "v1" },
+  "meta": { "templateCredsSetupCompleted": false }
+}

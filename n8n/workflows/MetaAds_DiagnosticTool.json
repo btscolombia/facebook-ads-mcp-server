@@ -1,0 +1,120 @@
+{
+  "name": "MetaAds_DiagnosticTool",
+  "nodes": [
+    {
+      "id": "trig-diag",
+      "name": "Execute Workflow Trigger",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        300
+      ],
+      "parameters": {
+        "inputSource": "defineBelow",
+        "inputFields": {
+          "values": [
+            { "name": "act_id", "type": "string", "required": true },
+            { "name": "campaign_id", "type": "string", "required": false }
+          ]
+        }
+      }
+    },
+    {
+      "id": "code-prep-diag",
+      "name": "Preparar params",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const j = $input.first().json;\nconst act_id = j.act_id || j.meta_ad_account_id || '';\nconst campaign_id = j.campaign_id || null;\nif (!act_id || !act_id.startsWith('act_')) return [{ json: { error: 'act_id requerido' } }];\nreturn [{ json: { act_id, campaign_id } }];"
+      }
+    },
+    {
+      "id": "http-ads",
+      "name": "GET anuncios",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://metamcp.agencybts.com/api/graph",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ method: 'GET', path: $('Preparar params').first().json.campaign_id ? $('Preparar params').first().json.campaign_id + '/ads' : $('Preparar params').first().json.act_id + '/ads', params: { fields: 'id,name,effective_status,ad_review_feedback,status', limit: 100 } }) }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "code-diagnose",
+      "name": "Filtrar problematicos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const items = $input.all();\nlet ads = [];\nfor (const it of items) {\n  const j = it.json;\n  if (j.error) continue;\n  const data = Array.isArray(j.data) ? j.data : [j];\n  ads = ads.concat(data);\n}\nconst problematic = ads.filter(a => {\n  const status = (a.effective_status || a.status || '').toLowerCase();\n  const feedback = a.ad_review_feedback;\n  return status === 'rejected' || status === 'pending_review' || (feedback && Object.keys(feedback).length > 0);\n});\nconst output = { total: ads.length, problematic_count: problematic.length, ads: problematic.map(a => ({ id: a.id, name: a.name, status: a.effective_status || a.status, feedback: a.ad_review_feedback || null })) };\nreturn [{ json: { output: JSON.stringify(output, null, 2) } }];"
+      }
+    }
+  ],
+  "connections": {
+    "Execute Workflow Trigger": {
+      "main": [
+        [
+          {
+            "node": "Preparar params",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar params": {
+      "main": [
+        [
+          {
+            "node": "GET anuncios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET anuncios": {
+      "main": [
+        [
+          {
+            "node": "Filtrar problematicos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveDataErrorExecution": "all",
+    "saveDataSuccessExecution": "all",
+    "saveManualExecutions": true,
+    "saveExecutionProgress": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  }
+}
