@@ -1092,6 +1092,98 @@ def get_leadgen_forms(page_id: str, limit: Optional[int] = 25) -> Dict:
 
 
 @mcp.tool()
+def upload_ad_image(
+    act_id: str,
+    image_base64: str,
+    name: Optional[str] = None,
+) -> Dict:
+    """Sube una imagen a la librería de la cuenta de ads usando bytes en base64.
+    
+    Usa esto cuando el usuario envía una imagen adjunta en el chat. El resultado
+    incluye image_hash para usar en creatives (asset_feed_spec, object_story_spec).
+    
+    Args:
+        act_id (str): ID de cuenta de ads (ej. act_215272717429201)
+        image_base64 (str): Contenido de la imagen codificado en base64 (sin prefijo data:...)
+        name (Optional[str]): Nombre del archivo con extensión (ej. image.jpg). Default: upload.jpg
+    
+    Returns:
+        Dict con images: { filename: { hash, url, ... } } o error.
+    """
+    import base64
+    access_token = _get_fb_access_token()
+    act_id = str(act_id).strip()
+    # Meta exige extensión en el nombre
+    filename = (name or "upload.jpg").strip()
+    if not filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')):
+        filename = "upload.jpg"
+    url = f"{FB_GRAPH_URL}/{act_id}/adimages"
+    try:
+        # Meta espera bytes como base64 puro (sin data:image/...;base64,)
+        b64_clean = image_base64.split(",")[-1] if "," in image_base64 else image_base64
+        # Validar que sea base64 válido
+        base64.b64decode(b64_clean, validate=True)
+    except Exception as e:
+        return {'error': {'message': f'image_base64 inválido: {e}'}}
+    data = {
+        'access_token': access_token,
+        'bytes': b64_clean,
+        'name': filename,
+    }
+    return _make_graph_api_post(url, data)
+
+
+@mcp.tool()
+def upload_ad_image_from_url(
+    act_id: str,
+    image_url: str,
+    name: Optional[str] = None,
+) -> Dict:
+    """Descarga una imagen desde una URL pública y la sube a la librería de la cuenta de ads.
+    
+    Usa esto cuando el usuario proporciona una URL (Drive, Dropbox, CDN, etc.).
+    La URL debe ser públicamente accesible (sin auth).
+    
+    Args:
+        act_id (str): ID de cuenta de ads (ej. act_215272717429201)
+        image_url (str): URL pública de la imagen
+        name (Optional[str]): Nombre del archivo con extensión. Se infiere de la URL si no se da.
+    
+    Returns:
+        Dict con images: { filename: { hash, url, ... } } o error.
+    """
+    import base64
+    access_token = _get_fb_access_token()
+    act_id = str(act_id).strip()
+    try:
+        resp = requests.get(image_url, timeout=30)
+        resp.raise_for_status()
+        img_bytes = resp.content
+    except requests.exceptions.RequestException as e:
+        return {'error': {'message': f'No se pudo descargar la imagen desde {image_url}: {e}'}}
+    if not img_bytes:
+        return {'error': {'message': 'La URL no devolvió contenido'}}
+    b64 = base64.b64encode(img_bytes).decode('ascii')
+    # Inferir extensión desde URL si es posible
+    url_path = image_url.split("?")[0].lower()
+    ext = ".jpg"
+    for e in ('.png', '.gif', '.webp', '.jpeg', '.bmp'):
+        if e in url_path:
+            ext = e if e != '.jpeg' else '.jpg'
+            break
+    filename = (name or "image" + ext).strip()
+    if not filename.lower().endswith(('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')):
+        filename = "image.jpg"
+    url = f"{FB_GRAPH_URL}/{act_id}/adimages"
+    data = {
+        'access_token': access_token,
+        'bytes': b64,
+        'name': filename,
+    }
+    return _make_graph_api_post(url, data)
+
+
+@mcp.tool()
 def create_lead_gen_test_campaign(
     act_id: str,
     page_id: str,
@@ -1880,6 +1972,90 @@ def get_adset_by_id(adset_id: str, fields: Optional[List[str]] = None) -> Dict:
         params['fields'] = ','.join(fields)
     
     return _make_graph_api_call(url, params)
+
+
+@mcp.tool()
+def get_custom_audiences_by_adaccount(
+    act_id: str,
+    fields: Optional[List[str]] = None,
+    limit: Optional[int] = 200,
+) -> Dict:
+    """Lists custom audiences for an ad account. Use to find audience IDs by name.
+    
+    Args:
+        act_id: Ad account ID (e.g. act_2695142834174710).
+        fields: Optional list of fields (id, name, subtype, approximate_count, etc.).
+        limit: Max audiences to return. Default 200.
+    
+    Returns:
+        Dict with 'data' list of custom audience objects.
+    """
+    access_token = _get_fb_access_token()
+    url = f"{FB_GRAPH_URL}/{act_id}/customaudiences"
+    params = {"access_token": access_token, "limit": limit or 200}
+    if fields:
+        params["fields"] = ",".join(fields)
+    return _make_graph_api_call(url, params)
+
+
+@mcp.tool()
+def search_geo_location(
+    q: str,
+    country_code: str = "CO",
+    location_types: Optional[List[str]] = None,
+    limit: int = 5,
+) -> Dict:
+    """Search for geo location keys (cities, regions, etc.) for ad targeting.
+    Used by scripts like crear_remarketing_wa_altiore for city/region targeting.
+
+    Args:
+        q: Search query (e.g. city name: 'Cartagena', 'Barranquilla').
+        country_code: ISO country code. Default 'CO'.
+        location_types: List of 'city', 'region', 'country', 'zip'. Default ['city'].
+        limit: Max results. Default 5.
+
+    Returns:
+        Dict with 'data' list of {key, name, type, ...}. Use key in targeting geo_locations.
+    """
+    access_token = _get_fb_access_token()
+    url = f"{FB_GRAPH_URL}/search"
+    types = location_types or ["city"]
+    params = {
+        "access_token": access_token,
+        "type": "adgeolocation",
+        "location_types": json.dumps(types),
+        "q": q,
+        "country_code": country_code,
+        "limit": limit,
+    }
+    return _make_graph_api_call(url, params)
+
+
+@mcp.tool()
+def update_adset_targeting(
+    adset_id: str,
+    targeting: Dict,
+) -> Dict:
+    """Updates an ad set's targeting. Pass the full targeting object (include existing custom_audiences).
+    
+    Args:
+        adset_id: Ad set ID to update.
+        targeting: Full targeting dict (geo_locations, age_min, age_max, custom_audiences, etc.).
+                  To add an audience, include it in custom_audiences: [{"id": "..."}, ...].
+    
+    Returns:
+        Dict with success=True or error message.
+    """
+    access_token = _get_fb_access_token()
+    url = f"{FB_GRAPH_URL}/{adset_id}"
+    data = {
+        "access_token": access_token,
+        "targeting": json.dumps(targeting),
+    }
+    result = _make_graph_api_post(url, data)
+    if result.get("error"):
+        return {"success": False, "error": result["error"].get("message", str(result))}
+    return {"success": True, "adset_id": adset_id}
 
 
 @mcp.tool()
@@ -2857,6 +3033,54 @@ def get_instagram_media_details(
     return _fetch_node(node_id=media_id, fields=effective_fields)
 
 
+def _create_http_app_with_graph_proxy():
+    """Crea app ASGI con MCP + proxy REST para Graph API (sub-workflows n8n)."""
+    from starlette.applications import Starlette
+    from starlette.routing import Route, Mount
+    from starlette.responses import JSONResponse
+    from starlette.requests import Request
+
+    async def graph_proxy(request: Request):
+        """POST /api/graph: proxy a Facebook Graph API. Body: {path, params?, data?, method?}."""
+        try:
+            body = await request.json()
+        except Exception as e:
+            return JSONResponse({"error": {"message": f"Invalid JSON body: {e}"}}, status_code=400)
+        path = (body.get("path") or "").strip().lstrip("/")
+        if not path:
+            return JSONResponse({"error": {"message": "Missing 'path' (e.g. act_123/campaigns)"}}, status_code=400)
+        method = (body.get("method") or "GET").upper()
+        params = body.get("params") or {}
+        data = body.get("data")
+        token = _get_fb_access_token()
+        url = f"{FB_GRAPH_URL}/{path}"
+        try:
+            if method == "GET":
+                params["access_token"] = token
+                result = _make_graph_api_call(url, params)
+            elif method == "POST":
+                data = data or {}
+                data["access_token"] = token
+                result = _make_graph_api_post(url, data)
+            else:
+                return JSONResponse({"error": {"message": "method must be GET or POST"}}, status_code=400)
+            return JSONResponse(result)
+        except Exception as e:
+            err_msg = str(e)
+            return JSONResponse({"error": {"message": err_msg}}, status_code=500)
+
+    mcp.settings.stateless_http = True
+    mcp.settings.json_response = True
+    mcp_app = mcp.streamable_http_app()
+    app = Starlette(
+        routes=[
+            Route("/api/graph", graph_proxy, methods=["POST"]),
+            Mount("/mcp", mcp_app),
+        ]
+    )
+    return app
+
+
 if __name__ == "__main__":
     _get_fb_access_token()
 
@@ -2865,16 +3089,10 @@ if __name__ == "__main__":
     if os.environ.get("TRANSPORT", "").lower() == "http":
         import uvicorn
 
-        # Stateless HTTP: cada petición es independiente, no requiere session ID.
-        # Necesario para Antigravity y otros clientes que no mantienen session (mcp-proxy).
-        mcp.settings.stateless_http = True
-        # JSON response: devuelve JSON directo en lugar de SSE. Mejor para n8n, bridge de Antigravity, y clientes HTTP simples.
-        mcp.settings.json_response = True
-
         host = os.environ.get("HOST", "0.0.0.0")
         port = int(os.environ.get("PORT", "8000"))
-        app = mcp.streamable_http_app()
-        print(f"Starting MCP server at http://{host}:{port}/mcp (streamable HTTP)")
+        app = _create_http_app_with_graph_proxy()
+        print(f"Starting MCP server at http://{host}:{port}/mcp | REST proxy at POST /api/graph")
         # proxy_headers + forwarded_allow_ips: required behind reverse proxy (Dockploy) to avoid "Invalid Host header"
         uvicorn.run(
             app,
