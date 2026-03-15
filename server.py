@@ -3035,6 +3035,7 @@ def get_instagram_media_details(
 
 def _create_http_app_with_graph_proxy():
     """Crea app ASGI con MCP + proxy REST para Graph API (sub-workflows n8n)."""
+    import contextlib
     from starlette.applications import Starlette
     from starlette.routing import Route, Mount
     from starlette.responses import JSONResponse
@@ -3072,11 +3073,31 @@ def _create_http_app_with_graph_proxy():
     mcp.settings.stateless_http = True
     mcp.settings.json_response = True
     mcp_app = mcp.streamable_http_app()
+    session_manager = mcp.session_manager
+
+    # Wrapper ASGI que reenvía /mcp y /mcp/ al session_manager (path="/") y evita 404 con cualquier deploy
+    class MCPEndpointWrapper:
+        def __init__(self, manager):
+            self._manager = manager
+
+        async def __call__(self, scope, receive, send):
+            scope = dict(scope)
+            scope["path"] = "/"
+            await self._manager.handle_request(scope, receive, send)
+
+    mcp_wrapper = MCPEndpointWrapper(session_manager)
+
+    @contextlib.asynccontextmanager
+    async def lifespan(app):
+        async with session_manager.run():
+            yield
+
     app = Starlette(
         routes=[
             Route("/api/graph", graph_proxy, methods=["POST"]),
-            Mount("/mcp", mcp_app),
-        ]
+            Mount("/mcp", mcp_wrapper),
+        ],
+        lifespan=lifespan,
     )
     return app
 
