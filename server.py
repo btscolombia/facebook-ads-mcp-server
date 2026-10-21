@@ -3099,7 +3099,34 @@ def _create_http_app_with_graph_proxy():
         ],
         lifespan=lifespan,
     )
-    return app
+
+    # Auth: si MCP_API_KEY está definida, exige "Authorization: Bearer <key>", "X-API-Key: <key>" o "?key=<key>"
+    api_key = os.environ.get("MCP_API_KEY", "").strip()
+    if not api_key:
+        print("WARNING: MCP_API_KEY no definida; /mcp y /api/graph quedan abiertos sin autenticación")
+        return app
+
+    import hmac
+    from urllib.parse import parse_qs
+
+    class APIKeyMiddleware:
+        def __init__(self, app):
+            self._app = app
+
+        async def __call__(self, scope, receive, send):
+            if scope["type"] != "http":
+                return await self._app(scope, receive, send)
+            headers = {k.decode().lower(): v.decode() for k, v in scope.get("headers", [])}
+            auth = headers.get("authorization", "")
+            provided = auth[7:].strip() if auth.lower().startswith("bearer ") else headers.get("x-api-key", "")
+            if not provided:
+                provided = (parse_qs(scope.get("query_string", b"").decode()).get("key") or [""])[0]
+            if not hmac.compare_digest(provided, api_key):
+                response = JSONResponse({"error": {"message": "Unauthorized"}}, status_code=401)
+                return await response(scope, receive, send)
+            return await self._app(scope, receive, send)
+
+    return APIKeyMiddleware(app)
 
 
 if __name__ == "__main__":

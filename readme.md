@@ -105,6 +105,7 @@ For remote deployment (Docker/Dockploy), the server supports **Streamable HTTP**
 |----------|----------|-------------|
 | `TRANSPORT` | Yes | Set to `http` to enable HTTP mode |
 | `FB_TOKEN` | Yes | Meta/Facebook access token |
+| `MCP_API_KEY` | Recommended | Shared secret. If set, `/mcp` and `/api/graph` require `Authorization: Bearer <key>`, `X-API-Key: <key>` or `?key=<key>`. If empty, both endpoints are open. |
 | `PORT` | No | Port to listen on (default: 8000) |
 | `HOST` | No | Host to bind (default: 0.0.0.0) |
 | `ALLOWED_HOSTS` | No | Comma-separated list of allowed Host headers (e.g. `metamcp.example.com`). If empty with TRANSPORT=http, Host validation is disabled for proxy deployments. |
@@ -114,6 +115,7 @@ For remote deployment (Docker/Dockploy), the server supports **Streamable HTTP**
 ```
 TRANSPORT=http
 FB_TOKEN=your_meta_access_token
+MCP_API_KEY=a_long_random_secret
 PORT=8000
 ```
 
