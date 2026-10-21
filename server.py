@@ -6,7 +6,9 @@ import requests
 from typing import Dict, List, Optional, Any
 import json
 import os
+import re
 import sys
+from urllib.parse import urlparse
 
     
 
@@ -74,18 +76,38 @@ def _get_fb_access_token() -> str:
 
     return FB_ACCESS_TOKEN
 
+_ACCESS_TOKEN_RE = re.compile(r'([?&])access_token=[^&#\s"\']*(&?)')
+
+
+def _redact(obj: Any) -> Any:
+    """Quita access_token de URLs y mensajes (Meta lo incluye en paging.next/previous y en errores HTTP)."""
+    if isinstance(obj, str):
+        return _ACCESS_TOKEN_RE.sub(lambda m: m.group(1) if m.group(2) else '', obj)
+    if isinstance(obj, dict):
+        return {k: _redact(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_redact(v) for v in obj]
+    return obj
+
+
 def _make_graph_api_call(url: str, params: Dict[str, Any]) -> Dict:
     """Makes a GET request to the Facebook Graph API and handles the response."""
     try:
         response = requests.get(url, params=params)
-        response.raise_for_status()  # Raises HTTPError for bad responses (4xx or 5xx)
-        return response.json()
+        if not response.ok:
+            # Devuelve el error de Meta (sin token) en vez de la URL con access_token
+            try:
+                parsed = response.json()
+            except ValueError:
+                parsed = {}
+            if 'error' in parsed:
+                print(f"Graph API GET {url}: {response.status_code} - {parsed['error'].get('message')}")
+                return _redact(parsed)
+            response.raise_for_status()
+        return _redact(response.json())
     except requests.exceptions.RequestException as e:
-        # Log the error and re-raise or handle more gracefully
-        print(f"Error making Graph API call to {url} with params {params}: {e}")
-        # Depending on desired behavior, you might want to raise a custom exception
-        # or return a specific error structure. Re-raising keeps the current behavior.
-        raise
+        print(f"Error making Graph API call to {url}: {_redact(str(e))}")
+        raise RuntimeError(_redact(str(e))) from None
 
 
 def _make_graph_api_post(url: str, data: Dict[str, Any]) -> Dict:
@@ -102,13 +124,13 @@ def _make_graph_api_post(url: str, data: Dict[str, Any]) -> Dict:
         if not response.ok:
             err_msg = parsed.get('error', {}).get('message', response.text or str(response.status_code))
             print(f"Graph API POST {url}: {response.status_code} - {err_msg}")
-            print(f"FULL ERROR RESPONSE: {json.dumps(parsed, indent=2, default=str)}")
-            return parsed  # Return body so caller can check 'error' key
-        return parsed
+            print(f"FULL ERROR RESPONSE: {json.dumps(_redact(parsed), indent=2, default=str)}")
+            return _redact(parsed)  # Return body so caller can check 'error' key
+        return _redact(parsed)
     except requests.exceptions.RequestException as e:
         err_detail = getattr(getattr(e, 'response', None), 'text', '') or str(e)
-        print(f"Error making Graph API POST to {url}: {e}. Response: {err_detail}")
-        raise
+        print(f"Error making Graph API POST to {url}: {_redact(str(e))}. Response: {_redact(err_detail)}")
+        raise RuntimeError(_redact(str(e))) from None
 
 
 def _make_graph_api_patch(url: str, data: Dict[str, Any]) -> Dict:
@@ -848,11 +870,11 @@ def fetch_pagination_url(url: str) -> Dict:
     
     Args:
         url: The complete pagination URL (e.g., from response['paging']['next'] or response['paging']['previous']).
-             It includes the necessary token and parameters.
-             
+             The server strips the access token from responses and adds it back here.
+
     Returns:
         The dictionary containing the next/previous page of results.
-        
+
     Example:
         ```python
         # Assuming 'initial_results' is the dict from a previous insights call
@@ -863,11 +885,12 @@ def fetch_pagination_url(url: str) -> Dict:
             prev_page_data = fetch_pagination_url(url=initial_results["paging"]["previous"])
         ```
     """
-    # This function takes a full URL which already includes the access token,
-    # so we don't use the _make_graph_api_call helper here.
-    response = requests.get(url)
-    response.raise_for_status()
-    return response.json()
+    # El token solo se añade a URLs de la Graph API, para no enviarlo a otros hosts
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname != "graph.facebook.com":
+        return {"error": {"message": "fetch_pagination_url solo acepta URLs https://graph.facebook.com/..."}}
+    params = {} if "access_token=" in (parsed.query or "") else {"access_token": _get_fb_access_token()}
+    return _make_graph_api_call(url, params)
 
 
 # --- Ad Creative Tools ---
@@ -3067,7 +3090,7 @@ def _create_http_app_with_graph_proxy():
                 return JSONResponse({"error": {"message": "method must be GET or POST"}}, status_code=400)
             return JSONResponse(result)
         except Exception as e:
-            err_msg = str(e)
+            err_msg = _redact(str(e))
             return JSONResponse({"error": {"message": err_msg}}, status_code=500)
 
     mcp.settings.stateless_http = True
